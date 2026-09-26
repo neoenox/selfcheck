@@ -8,6 +8,24 @@ import '../infrastructure/price_repository.dart';
 import '../infrastructure/price_stabilizer.dart';
 import 'compare_use_case.dart';
 
+@visibleForTesting
+String friendlyScanErrorMessage(Object error) {
+  final text = error.toString();
+
+  if (text.contains('SQLITE_FULL') ||
+      text.contains('database or disk is full') ||
+      text.contains(' disk ')) {
+    return 'ストレージ容量が不足しています。';
+  }
+  if (text.contains('SqliteException') || text.contains('database')) {
+    return 'データベースエラーが発生しました。もう一度お試しください。';
+  }
+  if (text.contains('Permission denied')) {
+    return 'カメラの権限が必要です。設定から許可してください。';
+  }
+  return '予期せぬエラーが発生しました。もう一度お試しください。';
+}
+
 /// ScanCoordinator manages the scanning session lifecycle.
 ///
 /// Emits state changes via [stateStream] and comparison results via
@@ -296,20 +314,7 @@ class ScanCoordinator {
     // a higher-level lifecycle owner.
   }
 
-  String _friendlyErrorMessage(Object error) {
-    final text = error.toString();
-
-    if (text.contains('SqliteException') || text.contains('database')) {
-      return 'データベースエラーが発生しました。もう一度お試しください。';
-    }
-    if (text.contains(' disk ') || text.contains(' SQLITE_FULL')) {
-      return 'ストレージ容量が不足しています。';
-    }
-    if (text.contains('Permission denied')) {
-      return 'カメラの権限が必要です。設定から許可してください。';
-    }
-    return '予期せぬエラーが発生しました。もう一度お試しください。';
-  }
+  String _friendlyErrorMessage(Object error) => friendlyScanErrorMessage(error);
 
   bool _isCurrentSession(int generation) => generation == _sessionGeneration;
 
