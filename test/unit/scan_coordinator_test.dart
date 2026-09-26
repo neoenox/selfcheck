@@ -63,6 +63,24 @@ void main() {
       expect(coordinator.currentState, ScanState.idle);
     });
   });
+  group('friendlyScanErrorMessage', () {
+    test('classifies SQLITE_FULL as storage exhaustion before generic SQLite', () {
+      expect(
+        friendlyScanErrorMessage(
+          Exception('SqliteException(13): database or disk is full SQLITE_FULL'),
+        ),
+        'ストレージ容量が不足しています。',
+      );
+    });
+
+    test('keeps other SQLite failures as generic database errors', () {
+      expect(
+        friendlyScanErrorMessage(Exception('SqliteException: malformed database')),
+        'データベースエラーが発生しました。もう一度お試しください。',
+      );
+    });
+  });
+
 }
 
 /// Mock BarcodeRecognizerAdapter for testing
