@@ -75,8 +75,7 @@ void main() {
         expect(states, contains(ScanState.error));
         expect(states, isNot(contains(ScanState.result)));
         expect(errors, isNotEmpty);
-        expect(errors.last, isNotNull);
-        // Error message is user-friendly (e.g. "ストレージ容量が不足しています。")
+        expect(errors.last, 'ストレージ容量が不足しています。');
         expect(errors.last, isNot(contains('Exception')));
         expect(errors.last, isNot(contains('disk full')));
 
@@ -347,7 +346,7 @@ class _BrokenRepository implements PriceRepository {
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
   }) async {
-    throw Exception('Simulated DB failure: disk full');
+    throw Exception('SqliteException(13): database or disk is full, SQLITE_FULL');
   }
 
   @override
@@ -361,7 +360,7 @@ class _BrokenRepository implements PriceRepository {
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
   }) async {
-    throw Exception('Simulated DB failure: disk full');
+    throw Exception('SqliteException(13): database or disk is full, SQLITE_FULL');
   }
 
   @override
