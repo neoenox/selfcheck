@@ -299,11 +299,13 @@ class ScanCoordinator {
   String _friendlyErrorMessage(Object error) {
     final text = error.toString();
 
+    if (text.contains('SQLITE_FULL') ||
+        text.contains('database or disk is full') ||
+        text.contains(' disk full')) {
+      return 'ストレージ容量が不足しています。';
+    }
     if (text.contains('SqliteException') || text.contains('database')) {
       return 'データベースエラーが発生しました。もう一度お試しください。';
-    }
-    if (text.contains(' disk ') || text.contains(' SQLITE_FULL')) {
-      return 'ストレージ容量が不足しています。';
     }
     if (text.contains('Permission denied')) {
       return 'カメラの権限が必要です。設定から許可してください。';
