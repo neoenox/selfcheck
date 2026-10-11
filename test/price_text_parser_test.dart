@@ -229,4 +229,46 @@ void main() {
     expect(result, isNotNull);
     expect(result!.priceYen, 429);
   });
+
+  group('parsePriceCandidates', () {
+    const nearRegion = Rect(left: 0, top: 50, right: 100, bottom: 100);
+    const farRegion = Rect(left: 500, top: 500, right: 600, bottom: 550);
+
+    test('returns ranked candidates with their regions', () {
+      final candidates = parsePriceCandidates([
+        (text: '398', region: nearRegion),
+        (text: '税込 298円', region: farRegion),
+      ]);
+
+      expect(candidates.map((c) => c.priceYen), [298, 398]);
+      expect(candidates[0].region, farRegion);
+      expect(candidates[1].region, nearRegion);
+    });
+
+    test('returns empty for ambiguous contextual prices', () {
+      expect(
+        parsePriceCandidates([(text: '通常 398円 特売 298円', region: region)]),
+        isEmpty,
+      );
+    });
+
+    test('returns empty when no price is found', () {
+      expect(parsePriceCandidates([(text: '在庫 12', region: region)]), isEmpty);
+      expect(parsePriceCandidates(<({String text, Rect region})>[]), isEmpty);
+    });
+
+    test('parsePriceText matches the top-ranked candidate', () {
+      final lines = [
+        (text: '398', region: region),
+        (text: '税込 298円', region: region),
+      ];
+
+      final single = parsePriceText(lines);
+      final ranked = parsePriceCandidates(lines);
+
+      expect(single, isNotNull);
+      expect(single!.priceYen, ranked.first.priceYen);
+      expect(single.region, ranked.first.region);
+    });
+  });
 }

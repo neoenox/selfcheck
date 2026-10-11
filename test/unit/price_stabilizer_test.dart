@@ -79,5 +79,61 @@ void main() {
       expect(stabilizer.confidence, 0.85);
       expect(stabilizer.stablePrice, isNull);
     });
+
+    test('submitFrame stabilizes every value in recent frames', () {
+      const near = Rect(left: 0, top: 50, right: 100, bottom: 100);
+      const far = Rect(left: 500, top: 500, right: 600, bottom: 550);
+      List<PriceCandidate> frame() => [
+        PriceCandidate(
+          priceYen: 298,
+          confidence: 0.9,
+          region: far,
+          rawTexts: const ['税込298円'],
+        ),
+        PriceCandidate(
+          priceYen: 398,
+          confidence: 0.9,
+          region: near,
+          rawTexts: const ['398'],
+        ),
+      ];
+
+      expect(stabilizer.submitFrame(frame()), isFalse);
+      expect(stabilizer.submitFrame(frame()), isFalse);
+      expect(stabilizer.submitFrame(frame()), isTrue);
+
+      // Top-ranked value stays first, but both are available for
+      // JAN association.
+      expect(stabilizer.stablePrice, 298);
+      expect(stabilizer.stableCandidates.map((c) => c.priceYen), [298, 398]);
+      expect(stabilizer.stableCandidates[1].region, near);
+    });
+
+    test('a value missing from a recent frame loses stability', () {
+      const near = Rect(left: 0, top: 50, right: 100, bottom: 100);
+      const far = Rect(left: 500, top: 500, right: 600, bottom: 550);
+      PriceCandidate at(int value, Rect region) => PriceCandidate(
+        priceYen: value,
+        confidence: 0.9,
+        region: region,
+        rawTexts: ['$value'],
+      );
+
+      stabilizer.submitFrame([at(298, far), at(398, near)]);
+      stabilizer.submitFrame([at(298, far)]);
+      expect(stabilizer.submitFrame([at(298, far), at(398, near)]), isTrue);
+
+      expect(stabilizer.stablePrice, 298);
+      expect(stabilizer.stableCandidates.map((c) => c.priceYen), [298]);
+    });
+
+    test('empty frames are ignored without breaking stability', () {
+      expect(stabilizer.submitFrame([candidate(398)]), isFalse);
+      expect(stabilizer.submitFrame([candidate(398)]), isFalse);
+      expect(stabilizer.submitFrame(const []), isFalse);
+      expect(stabilizer.submitFrame([candidate(398)]), isTrue);
+
+      expect(stabilizer.stablePrice, 398);
+    });
   });
 }

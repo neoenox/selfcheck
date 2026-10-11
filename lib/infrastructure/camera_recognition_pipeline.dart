@@ -32,8 +32,8 @@ class CameraRecognitionPipeline extends ChangeNotifier {
   final TextRecognizer _textRecognizer;
   final StreamController<BarcodeCandidate> _barcodeResults =
       StreamController<BarcodeCandidate>.broadcast();
-  final StreamController<PriceCandidate> _priceResults =
-      StreamController<PriceCandidate>.broadcast();
+  final StreamController<List<PriceCandidate>> _priceResults =
+      StreamController<List<PriceCandidate>>.broadcast();
 
   CameraController? _cameraController;
   CameraDescription? _camera;
@@ -49,7 +49,7 @@ class CameraRecognitionPipeline extends ChangeNotifier {
   DateTime _lastProcessed = DateTime.fromMillisecondsSinceEpoch(0);
 
   Stream<BarcodeCandidate> get barcodeResults => _barcodeResults.stream;
-  Stream<PriceCandidate> get priceResults => _priceResults.stream;
+  Stream<List<PriceCandidate>> get priceResults => _priceResults.stream;
   CameraController? get cameraController => _cameraController;
   bool get isReady => _cameraController?.value.isInitialized ?? false;
   bool get isCameraActive => _cameraActive;
@@ -206,7 +206,7 @@ class CameraRecognitionPipeline extends ChangeNotifier {
         if (!_isCurrentCameraOperation(generation) || !_priceEnabled) {
           return;
         }
-        final candidate = parsePriceText(
+        final candidates = parsePriceCandidates(
           recognizedText.blocks.expand(
             (block) => block.lines.map(
               (line) => (
@@ -221,8 +221,10 @@ class CameraRecognitionPipeline extends ChangeNotifier {
             ),
           ),
         );
-        if (candidate != null && !_priceResults.isClosed) {
-          _priceResults.add(candidate);
+        // Ambiguous or empty frames yield no candidates and are skipped, so
+        // a guessed price can never enter stabilization.
+        if (candidates.isNotEmpty && !_priceResults.isClosed) {
+          _priceResults.add(candidates);
         }
       }
     } on Object catch (error, stackTrace) {
@@ -385,7 +387,7 @@ class CameraPriceOcrAdapter implements PriceOcrAdapter {
   final CameraRecognitionPipeline pipeline;
 
   @override
-  Stream<PriceCandidate> get results => pipeline.priceResults;
+  Stream<List<PriceCandidate>> get results => pipeline.priceResults;
 
   @override
   void pause() => pipeline.disablePrice();

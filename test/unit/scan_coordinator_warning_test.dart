@@ -227,12 +227,13 @@ class _ControllableBarcodeAdapter implements BarcodeRecognizerAdapter {
 }
 
 class _ControllablePriceAdapter implements PriceOcrAdapter {
-  final _controller = StreamController<PriceCandidate>.broadcast();
+  final _controller = StreamController<List<PriceCandidate>>.broadcast();
 
   @override
-  Stream<PriceCandidate> get results => _controller.stream;
+  Stream<List<PriceCandidate>> get results => _controller.stream;
 
-  void add(PriceCandidate candidate) => _controller.add(candidate);
+  void add(PriceCandidate candidate) => _controller.add([candidate]);
+  void addFrame(List<PriceCandidate> frame) => _controller.add(frame);
   void addError(Object error) => _controller.addError(error);
   Future<void> close() => _controller.close();
 

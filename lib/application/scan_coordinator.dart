@@ -65,7 +65,7 @@ class ScanCoordinator {
   ScanState get currentState => _state;
 
   StreamSubscription<BarcodeCandidate>? _barcodeSubscription;
-  StreamSubscription<PriceCandidate>? _priceSubscription;
+  StreamSubscription<List<PriceCandidate>>? _priceSubscription;
 
   ScanCoordinator({
     required this._repository,
@@ -108,10 +108,10 @@ class ScanCoordinator {
     );
 
     _priceSubscription = _priceAdapter.results.listen(
-      (price) {
+      (frame) {
         if (!_isCurrentSession(generation)) return;
         try {
-          unawaited(_onPriceDetected(price, generation));
+          unawaited(_onPriceDetected(frame, generation));
         } catch (error, stackTrace) {
           _handleAdapterError('価格OCR処理エラー', error, stackTrace, generation);
         }
@@ -152,24 +152,22 @@ class ScanCoordinator {
     _barcodeAdapter.pause();
     _priceAdapter.pause();
 
-    final stablePrice = _stabilizer.stablePrice;
-    final stableCandidate = _stabilizer.stableCandidate;
-    if (stablePrice != null &&
-        stableCandidate != null &&
-        regionsAreSafelyAssociated(barcode.region, stableCandidate.region)) {
+    // Prefer the top-ranked stable candidate that is safely associated
+    // with this JAN. A higher-ranked distant price (e.g. a neighboring
+    // product's tax-inclusive total) must not shadow the nearby price.
+    final associated = _stabilizer.stableCandidates
+        .where((c) => regionsAreSafelyAssociated(barcode.region, c.region))
+        .toList();
+    if (associated.isNotEmpty) {
+      final selected = associated.first;
       unawaited(
-        _compare(
-          barcode,
-          stablePrice,
-          _stabilizer.stableConfidence,
-          generation,
-        ),
+        _compare(barcode, selected.priceYen, selected.confidence, generation),
       );
       return;
     }
 
     _pendingBarcode = barcode;
-    if (stablePrice != null) {
+    if (_stabilizer.stablePrice != null) {
       _stabilizer.reset();
     }
     _state = ScanState.waitingPrice;
@@ -177,38 +175,46 @@ class ScanCoordinator {
     _priceAdapter.resume();
   }
 
-  Future<void> _onPriceDetected(PriceCandidate price, int generation) async {
+  Future<void> _onPriceDetected(
+    List<PriceCandidate> frame,
+    int generation,
+  ) async {
     if (!_isCurrentSession(generation)) return;
     if (_state != ScanState.scanning && _state != ScanState.waitingPrice) {
       return;
     }
+    if (frame.isEmpty) return;
 
     // A readable price frame means recognition recovered; drop any stale
     // transient warning so it does not linger after recovery.
     _clearWarning();
-    final isStable = _stabilizer.submit(price);
+    final isStable = _stabilizer.submitFrame(frame);
     if (!isStable) return;
 
     _barcodeAdapter.pause();
     _priceAdapter.pause();
 
     if (_state == ScanState.waitingPrice && _pendingBarcode != null) {
-      final stableCandidate = _stabilizer.stableCandidate;
-      if (stableCandidate == null ||
-          !regionsAreSafelyAssociated(
-            _pendingBarcode!.region,
-            stableCandidate.region,
-          )) {
+      // Select from the stable candidates associated with the pending JAN.
+      // Rejecting a distant price must not hide an associated nearby one.
+      final associated = _stabilizer.stableCandidates
+          .where(
+            (c) =>
+                regionsAreSafelyAssociated(_pendingBarcode!.region, c.region),
+          )
+          .toList();
+      if (associated.isEmpty) {
         // Keep the JAN pending, but discard this stable value. Saving an
         // unrelated product's price under the JAN is worse than retrying.
         _stabilizer.reset();
         _priceAdapter.resume();
         return;
       }
+      final selected = associated.first;
       await _compare(
         _pendingBarcode!,
-        _stabilizer.stablePrice!,
-        _stabilizer.stableConfidence,
+        selected.priceYen,
+        selected.confidence,
         generation,
       );
       return;
@@ -417,7 +423,8 @@ abstract class BarcodeRecognizerAdapter {
 }
 
 abstract class PriceOcrAdapter {
-  Stream<PriceCandidate> get results;
+  /// One event per OCR frame, holding that frame's ranked price candidates.
+  Stream<List<PriceCandidate>> get results;
   void pause();
   void resume();
 }

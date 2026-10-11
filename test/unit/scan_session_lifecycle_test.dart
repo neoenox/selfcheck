@@ -188,18 +188,18 @@ class _TestBarcodeAdapter implements BarcodeRecognizerAdapter {
 }
 
 class _TestPriceAdapter implements PriceOcrAdapter {
-  final StreamController<PriceCandidate> _controller =
-      StreamController<PriceCandidate>.broadcast();
+  final StreamController<List<PriceCandidate>> _controller =
+      StreamController<List<PriceCandidate>>.broadcast();
   bool _paused = false;
   int resultsGetterCount = 0;
 
   @override
-  Stream<PriceCandidate> get results {
+  Stream<List<PriceCandidate>> get results {
     resultsGetterCount++;
     return _controller.stream.where((event) => !_paused);
   }
 
-  void add(PriceCandidate candidate) => _controller.add(candidate);
+  void add(PriceCandidate candidate) => _controller.add([candidate]);
 
   @override
   void pause() => _paused = true;
