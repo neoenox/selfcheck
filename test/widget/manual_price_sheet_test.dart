@@ -11,6 +11,7 @@ import 'package:selfcheck_jibun_check/presentation/scan_screen.dart';
 import 'package:selfcheck_jibun_check/presentation/scan_screen_controller.dart';
 
 const _barcodeRegion = Rect(left: 0, top: 0, right: 100, bottom: 50);
+const _nearPriceRegion = Rect(left: 0, top: 50, right: 100, bottom: 100);
 
 const _barcode = BarcodeCandidate(
   barcode: '4901234567890',
@@ -95,6 +96,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('¥350'), findsOneWidget);
+      expect(find.text('手入力'), findsOneWidget);
     });
 
     testWidgets('save stays disabled for invalid input', (tester) async {
@@ -147,6 +149,61 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('¥350'), findsOneWidget);
+      expect(find.text('手入力'), findsOneWidget);
+    });
+
+    testWidgets('OCR result shows no manual marker', (tester) async {
+      await tester.pumpWidget(buildTestApp());
+      await tester.pump();
+      controller.startScan();
+      await _settle(tester);
+
+      barcodeAdapter.add(_barcode);
+      await _settle(tester);
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.add(
+          const PriceCandidate(
+            priceYen: 398,
+            confidence: 0.9,
+            region: _nearPriceRegion,
+            rawTexts: ['398'],
+          ),
+        );
+        await _settle(tester);
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('¥398'), findsOneWidget);
+      expect(find.text('手入力'), findsNothing);
+    });
+
+    testWidgets('manual entry is offered while waiting for a barcode', (
+      tester,
+    ) async {
+      await tester.pumpWidget(buildTestApp());
+      await tester.pump();
+      controller.startScan();
+      await _settle(tester);
+
+      // Stable OCR without a barcode leads to noProduct guidance.
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.add(
+          const PriceCandidate(
+            priceYen: 398,
+            confidence: 0.9,
+            region: _nearPriceRegion,
+            rawTexts: ['398'],
+          ),
+        );
+        await _settle(tester);
+      }
+      expect(find.text('バーコードが見つかりません'), findsOneWidget);
+      expect(find.text('価格を手入力'), findsOneWidget);
+
+      await tester.tap(find.text('価格を手入力'));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('価格を手入力', skipOffstage: false), findsWidgets);
+      expect(find.byType(TextField), findsOneWidget);
     });
   });
 }
@@ -173,6 +230,8 @@ class _ControllablePriceAdapter implements PriceOcrAdapter {
   @override
   Stream<List<PriceCandidate>> get results => _controller.stream;
 
+  void add(PriceCandidate candidate) => _controller.add([candidate]);
+  void addFrame(List<PriceCandidate> frame) => _controller.add(frame);
   Future<void> close() => _controller.close();
 
   @override

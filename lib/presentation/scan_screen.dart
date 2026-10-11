@@ -230,7 +230,7 @@ class _ScanScreenState extends State<ScanScreen>
                     style: TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ),
-              if (state.isScanning)
+              if (state.isScanning || state.scanState == ScanState.noProduct)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4),
                   child: TextButton(
