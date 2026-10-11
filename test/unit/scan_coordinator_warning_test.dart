@@ -6,6 +6,7 @@ import 'package:selfcheck_jibun_check/application/scan_coordinator.dart';
 import 'package:selfcheck_jibun_check/domain/scan_state.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
+import 'package:selfcheck_jibun_check/infrastructure/database/app_database.dart';
 
 const _barcodeRegion = Rect(left: 0, top: 0, right: 100, bottom: 50);
 const _nearPriceRegion = Rect(left: 0, top: 50, right: 100, bottom: 100);
@@ -169,6 +170,42 @@ void main() {
       expect(coordinator.lastWarning, isNull);
       expect(coordinator.currentState, ScanState.scanning);
     });
+
+    test('fatal error during compare cannot flip back to result', () async {
+      final delayed = _DelayedRepository(repository);
+      final slowCoordinator = ScanCoordinator(
+        repository: delayed,
+        compareUseCase: CompareUseCase(delayed),
+        barcodeAdapter: barcodeAdapter,
+        priceAdapter: priceAdapter,
+      );
+      addTearDown(slowCoordinator.dispose);
+
+      final states = <ScanState>[];
+      final results = <int>[];
+      slowCoordinator.stateStream.listen(states.add);
+      slowCoordinator.resultStream.listen(
+        (result) => results.add(result.currentPrice),
+      );
+
+      slowCoordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.add(_price(398));
+        await _flush(30);
+      }
+      // The compare is now in flight (slow product lookup).
+      expect(slowCoordinator.currentState, ScanState.comparing);
+
+      priceAdapter.addError(Exception('Permission denied: camera access'));
+      await _flush(500);
+
+      expect(slowCoordinator.currentState, ScanState.error);
+      expect(states, contains(ScanState.error));
+      expect(states, isNot(contains(ScanState.result)));
+      expect(results, isEmpty);
+    });
   });
 }
 
@@ -204,4 +241,85 @@ class _ControllablePriceAdapter implements PriceOcrAdapter {
 
   @override
   void resume() {}
+}
+
+/// Repository delaying product lookup so a compare stays in flight.
+class _DelayedRepository implements PriceRepository {
+  final PriceRepository _inner;
+  _DelayedRepository(this._inner);
+
+  @override
+  Future<ProductIdentity?> findProductByJan(String jan) async {
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    return _inner.findProductByJan(jan);
+  }
+
+  @override
+  Future<ProductIdentity> createProvisionalProduct(String jan) =>
+      _inner.createProvisionalProduct(jan);
+
+  @override
+  Future<List<PriceObservation>> getValidObservations({
+    required String productId,
+    required DateTime since,
+    required int limit,
+  }) => _inner.getValidObservations(
+    productId: productId,
+    since: since,
+    limit: limit,
+  );
+
+  @override
+  Future<PriceObservation> insertObservation({
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+  }) => _inner.insertObservation(
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+  );
+
+  @override
+  Future<bool> isDuplicate({
+    required String productId,
+    required int priceYen,
+    required DateTime observedAt,
+  }) => _inner.isDuplicate(
+    productId: productId,
+    priceYen: priceYen,
+    observedAt: observedAt,
+  );
+
+  @override
+  Future<PriceObservation> insertObservationWithDate({
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    required DateTime observedAt,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+  }) => _inner.insertObservationWithDate(
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    observedAt: observedAt,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+  );
+
+  @override
+  void dispose() => _inner.dispose();
 }

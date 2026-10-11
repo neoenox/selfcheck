@@ -148,6 +148,22 @@ void main() {
       expect(controller.uiState.isError, isTrue);
       expect(controller.uiState.errorMessage, contains('カメラの権限'));
     });
+
+    test('init is idempotent: repeated init delivers events once', () async {
+      var notifications = 0;
+      controller.addListener(() => notifications++);
+
+      controller.init();
+      controller.startScan();
+      await _flush();
+      final base = notifications;
+
+      // One transient failure emits one error event and one warning event.
+      priceAdapter.addError(Exception('ML Kit busy'));
+      await _flush();
+
+      expect(notifications - base, 2);
+    });
   });
 }
 
