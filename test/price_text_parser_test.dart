@@ -184,6 +184,27 @@ void main() {
     );
   });
 
+  test('fails closed for coupon discount with multiple amounts', () {
+    expect(
+      parsePriceText([(text: 'クーポンで100円引き 398円', region: region)]),
+      isNull,
+    );
+  });
+
+  test('selects a single member-only price without guessing', () {
+    final result = parsePriceText([(text: '会員限定 298円', region: region)]);
+
+    expect(result, isNotNull);
+    expect(result!.priceYen, 298);
+  });
+
+  test('selects a product price next to a bulk-discount note', () {
+    final result = parsePriceText([(text: 'まとめ割 5%OFF 398円', region: region)]);
+
+    expect(result, isNotNull);
+    expect(result!.priceYen, 398);
+  });
+
   test('selects a single sale price without guessing', () {
     final result = parsePriceText([(text: '特売 298円', region: region)]);
 
