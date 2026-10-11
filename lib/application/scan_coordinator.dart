@@ -299,9 +299,13 @@ class ScanCoordinator {
   ///
   /// The state event is emitted before the error event so UI listeners that
   /// clear stale messages on state transitions still display the new error.
+  /// The session generation is invalidated so an in-flight compare (e.g. a
+  /// fatal adapter error arriving mid-compare) cannot flip the error back
+  /// to a result afterwards.
   void _transitionToError(String message) {
     _lastError = message;
 
+    _sessionGeneration++;
     _cancelSubscriptions();
     _resetRecognitionContext();
     _clearWarning();
