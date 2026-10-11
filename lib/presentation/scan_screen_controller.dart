@@ -91,8 +91,16 @@ class ScanScreenController extends ChangeNotifier {
 
   ScanScreenController({required this._coordinator});
 
-  /// Initialize and start listening to coordinator state/result/error streams
+  /// Initialize and start listening to coordinator state/result/error streams.
+  ///
+  /// Safe to call more than once (e.g. the owning widget is recreated):
+  /// previous subscriptions are cancelled first so events are never
+  /// delivered twice.
   void init() {
+    _stateSubscription?.cancel();
+    _resultSubscription?.cancel();
+    _errorSubscription?.cancel();
+    _warningSubscription?.cancel();
     _stateSubscription = _coordinator.stateStream.listen((scanState) {
       _onScanStateChanged(scanState);
     });
