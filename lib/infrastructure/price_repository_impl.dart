@@ -93,6 +93,10 @@ class PriceRepositoryImpl implements PriceRepository {
   }
 
   @override
+  Future<void> invalidateObservation(String id) =>
+      _database.invalidateObservation(id);
+
+  @override
   void dispose() {
     _database.close();
   }

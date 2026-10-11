@@ -39,5 +39,10 @@ abstract class PriceRepository {
     bool? isManualEntry,
   });
 
+  /// Retire an observation without deleting it (audit history is kept).
+  /// Retiring frees the duplicate slot so a corrected observation for the
+  /// same bucket can be stored.
+  Future<void> invalidateObservation(String id);
+
   void dispose();
 }

@@ -60,6 +60,25 @@ class _ScanScreenState extends State<ScanScreen>
     }
   }
 
+  Future<void> _openCorrectionSheet(
+    BuildContext context,
+    int currentPrice,
+  ) async {
+    await showManualPriceSheet(
+      context,
+      widget.controller,
+      initialPriceYen: currentPrice,
+      onSaveEntry: (entry) => widget.controller.correctLatestPrice(
+        priceYen: entry.priceYen,
+        isTaxInclusive: entry.isTaxInclusive,
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.uiState;
@@ -73,7 +92,7 @@ class _ScanScreenState extends State<ScanScreen>
           if (state.isScanning) _buildScanGuide(),
           ScanOverlay(scanState: state.scanState),
           if (state.isShowingResult && state.comparisonResult != null)
-            _buildResultOverlay(state),
+            _buildResultOverlay(context, state),
           _buildTopBar(state),
           _buildBottomControls(state),
         ],
@@ -275,7 +294,7 @@ class _ScanScreenState extends State<ScanScreen>
     );
   }
 
-  Widget _buildResultOverlay(ScanScreenUiState state) {
+  Widget _buildResultOverlay(BuildContext context, ScanScreenUiState state) {
     // DraggableScrollableSheet requires bounded height constraints, so it is
     // placed as a direct Stack child (loose bounded constraints) rather than
     // inside a bottom-anchored Positioned, which would give it an infinite
@@ -320,6 +339,12 @@ class _ScanScreenState extends State<ScanScreen>
                 onScanAgain: () {
                   widget.controller.dismissResult();
                   widget.controller.startScan();
+                },
+                onCorrectPrice: () {
+                  final currentPrice = state.comparisonResult?.currentPrice;
+                  if (currentPrice != null) {
+                    _openCorrectionSheet(context, currentPrice);
+                  }
                 },
               ),
               const SizedBox(height: 16),

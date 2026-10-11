@@ -327,4 +327,8 @@ class _DelayedRepository implements PriceRepository {
 
   @override
   void dispose() => _inner.dispose();
+
+  @override
+  Future<void> invalidateObservation(String id) =>
+      _inner.invalidateObservation(id);
 }

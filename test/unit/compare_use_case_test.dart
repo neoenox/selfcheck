@@ -417,4 +417,8 @@ class _GatedObservationsRepository implements PriceRepository {
 
   @override
   void dispose() {}
+
+  @override
+  Future<void> invalidateObservation(String id) =>
+      _delegate.invalidateObservation(id);
 }

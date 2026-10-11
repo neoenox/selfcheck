@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../application/scan_coordinator.dart';
 import '../scan_screen_controller.dart';
 
 /// Result of the manual price sheet.
@@ -28,8 +29,10 @@ String _priceKindLabel(_PriceKind kind) => switch (kind) {
 /// user taps save. Returns the save outcome, or null when dismissed.
 Future<ManualSaveOutcome?> showManualPriceSheet(
   BuildContext context,
-  ScanScreenController controller,
-) {
+  ScanScreenController controller, {
+  int? initialPriceYen,
+  Future<bool> Function(ManualPriceEntry entry)? onSaveEntry,
+}) {
   return showModalBottomSheet<ManualSaveOutcome>(
     context: context,
     isScrollControlled: true,
@@ -37,22 +40,36 @@ Future<ManualSaveOutcome?> showManualPriceSheet(
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
       ),
-      child: _ManualPriceForm(controller: controller),
+      child: _ManualPriceForm(
+        controller: controller,
+        initialPriceYen: initialPriceYen,
+        onSaveEntry: onSaveEntry,
+      ),
     ),
   );
 }
 
 class _ManualPriceForm extends StatefulWidget {
-  const _ManualPriceForm({required this.controller});
+  const _ManualPriceForm({
+    required this.controller,
+    this.initialPriceYen,
+    this.onSaveEntry,
+  });
 
   final ScanScreenController controller;
+  final int? initialPriceYen;
+
+  /// Overrides the default submit path (used for price correction).
+  final Future<bool> Function(ManualPriceEntry entry)? onSaveEntry;
 
   @override
   State<_ManualPriceForm> createState() => _ManualPriceFormState();
 }
 
 class _ManualPriceFormState extends State<_ManualPriceForm> {
-  final _priceController = TextEditingController();
+  late final TextEditingController _priceController = TextEditingController(
+    text: widget.initialPriceYen?.toString() ?? '',
+  );
   _PriceKind _kind = _PriceKind.regular;
   bool _isTaxInclusive = true;
   String? _submitError;
@@ -72,11 +89,11 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
 
   bool get _canSave => _priceValid && _isTaxInclusive;
 
-  void _save() {
+  void _save() async {
     final value = _parsedPrice;
     if (value == null || !_canSave) return;
 
-    final ok = widget.controller.submitManualPrice(
+    final entry = ManualPriceEntry(
       priceYen: value,
       isTaxInclusive: _isTaxInclusive,
       isSaleVisible: _kind == _PriceKind.sale ? true : null,
@@ -84,6 +101,17 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
       isCouponPriceVisible: _kind == _PriceKind.coupon ? true : null,
       isBulkDiscount: _kind == _PriceKind.bulk ? true : null,
     );
+    final save = widget.onSaveEntry;
+    final ok = save != null
+        ? await save(entry)
+        : widget.controller.submitManualPrice(
+            priceYen: entry.priceYen,
+            isTaxInclusive: entry.isTaxInclusive,
+            isSaleVisible: entry.isSaleVisible,
+            isMemberPriceVisible: entry.isMemberPriceVisible,
+            isCouponPriceVisible: entry.isCouponPriceVisible,
+            isBulkDiscount: entry.isBulkDiscount,
+          );
     if (!ok) {
       setState(() {
         _submitError = '保存できませんでした。スキャン状態を確認してください。';
