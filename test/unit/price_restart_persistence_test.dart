@@ -53,5 +53,34 @@ void main() {
       expect(observations.map((o) => o.priceYen), [398]);
       expect(observations.single.priceConfidence, 0.9);
     });
+
+    test('manual flags survive close and reopen', () async {
+      const jan = '4901234567891';
+
+      final firstSession = openRepository();
+      final product = await firstSession.createProvisionalProduct(jan);
+      await firstSession.insertObservation(
+        productId: product.id,
+        priceYen: 350,
+        priceConfidence: 1.0,
+        isSaleVisible: true,
+        isManualEntry: true,
+      );
+      firstSession.dispose();
+
+      final secondSession = openRepository();
+      addTearDown(secondSession.dispose);
+
+      final observations = await secondSession.getValidObservations(
+        productId: product.id,
+        since: DateTime.now().subtract(const Duration(minutes: 5)),
+        limit: 10,
+      );
+      expect(observations, hasLength(1));
+      expect(observations.single.priceYen, 350);
+      expect(observations.single.isSaleVisible, isTrue);
+      expect(observations.single.isManualEntry, isTrue);
+      expect(observations.single.isMemberPriceVisible, isNull);
+    });
   });
 }

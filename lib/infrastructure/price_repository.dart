@@ -17,6 +17,7 @@ abstract class PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   });
   Future<bool> isDuplicate({
     required String productId,
@@ -35,6 +36,7 @@ abstract class PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   });
 
   void dispose();

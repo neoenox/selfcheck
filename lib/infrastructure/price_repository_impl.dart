@@ -40,6 +40,7 @@ class PriceRepositoryImpl implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     return await _database.insertObservation(
       productId: productId,
@@ -49,6 +50,7 @@ class PriceRepositoryImpl implements PriceRepository {
       isMemberPriceVisible: isMemberPriceVisible,
       isCouponPriceVisible: isCouponPriceVisible,
       isBulkDiscount: isBulkDiscount,
+      isManualEntry: isManualEntry,
     );
   }
 
@@ -75,6 +77,7 @@ class PriceRepositoryImpl implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     return await _database.insertObservationWithDate(
       productId: productId,
@@ -85,6 +88,7 @@ class PriceRepositoryImpl implements PriceRepository {
       isMemberPriceVisible: isMemberPriceVisible,
       isCouponPriceVisible: isCouponPriceVisible,
       isBulkDiscount: isBulkDiscount,
+      isManualEntry: isManualEntry,
     );
   }
 

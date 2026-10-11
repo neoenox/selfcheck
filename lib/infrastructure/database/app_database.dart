@@ -45,6 +45,10 @@ class PriceObservations extends Table {
   BoolColumn get isCouponPriceVisible => boolean().nullable()();
   BoolColumn get isBulkDiscount => boolean().nullable()();
 
+  /// True when the price was entered manually by the user instead of OCR.
+  /// Null for observations recorded before manual entry existed.
+  BoolColumn get isManualEntry => boolean().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 
@@ -61,13 +65,13 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async {
       await m.createAll();
-      await customStatement('PRAGMA user_version = 2;');
+      await customStatement('PRAGMA user_version = 3;');
     },
     onUpgrade: (m, from, to) async {
       if (from < 2) {
@@ -87,6 +91,13 @@ class AppDatabase extends _$AppDatabase {
         );
 
         await customStatement('PRAGMA user_version = 2;');
+      }
+      if (from < 3) {
+        await customStatement(
+          'ALTER TABLE price_observation ADD COLUMN is_manual_entry INTEGER DEFAULT NULL;',
+        );
+
+        await customStatement('PRAGMA user_version = 3;');
       }
     },
     beforeOpen: (details) async {
@@ -156,6 +167,7 @@ class AppDatabase extends _$AppDatabase {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     final now = DateTime.now();
     return _insertObservation(
@@ -167,6 +179,7 @@ class AppDatabase extends _$AppDatabase {
       isMemberPriceVisible: isMemberPriceVisible,
       isCouponPriceVisible: isCouponPriceVisible,
       isBulkDiscount: isBulkDiscount,
+      isManualEntry: isManualEntry,
     );
   }
 
@@ -226,6 +239,7 @@ class AppDatabase extends _$AppDatabase {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     return _insertObservation(
       productId: productId,
@@ -236,6 +250,7 @@ class AppDatabase extends _$AppDatabase {
       isMemberPriceVisible: isMemberPriceVisible,
       isCouponPriceVisible: isCouponPriceVisible,
       isBulkDiscount: isBulkDiscount,
+      isManualEntry: isManualEntry,
     );
   }
 
@@ -248,6 +263,7 @@ class AppDatabase extends _$AppDatabase {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     final id = 'obs-$productId-${observedAt.microsecondsSinceEpoch}-$priceYen';
     final duplicateKey =
@@ -264,6 +280,7 @@ class AppDatabase extends _$AppDatabase {
       isMemberPriceVisible: Value(isMemberPriceVisible),
       isCouponPriceVisible: Value(isCouponPriceVisible),
       isBulkDiscount: Value(isBulkDiscount),
+      isManualEntry: Value(isManualEntry),
     );
 
     // duplicateKey remains a last-resort same-bucket concurrency guard. The

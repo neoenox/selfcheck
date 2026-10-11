@@ -512,6 +512,20 @@ class $PriceObservationsTable extends PriceObservations
       'CHECK ("is_bulk_discount" IN (0, 1))',
     ),
   );
+  static const VerificationMeta _isManualEntryMeta = const VerificationMeta(
+    'isManualEntry',
+  );
+  @override
+  late final GeneratedColumn<bool> isManualEntry = GeneratedColumn<bool>(
+    'is_manual_entry',
+    aliasedName,
+    true,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_manual_entry" IN (0, 1))',
+    ),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -525,6 +539,7 @@ class $PriceObservationsTable extends PriceObservations
     isMemberPriceVisible,
     isCouponPriceVisible,
     isBulkDiscount,
+    isManualEntry,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -631,6 +646,15 @@ class $PriceObservationsTable extends PriceObservations
         ),
       );
     }
+    if (data.containsKey('is_manual_entry')) {
+      context.handle(
+        _isManualEntryMeta,
+        isManualEntry.isAcceptableOrUnknown(
+          data['is_manual_entry']!,
+          _isManualEntryMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -688,6 +712,10 @@ class $PriceObservationsTable extends PriceObservations
         DriftSqlType.bool,
         data['${effectivePrefix}is_bulk_discount'],
       ),
+      isManualEntry: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_manual_entry'],
+      ),
     );
   }
 
@@ -710,6 +738,10 @@ class PriceObservation extends DataClass
   final bool? isMemberPriceVisible;
   final bool? isCouponPriceVisible;
   final bool? isBulkDiscount;
+
+  /// True when the price was entered manually by the user instead of OCR.
+  /// Null for observations recorded before manual entry existed.
+  final bool? isManualEntry;
   const PriceObservation({
     required this.id,
     required this.productId,
@@ -722,6 +754,7 @@ class PriceObservation extends DataClass
     this.isMemberPriceVisible,
     this.isCouponPriceVisible,
     this.isBulkDiscount,
+    this.isManualEntry,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -744,6 +777,9 @@ class PriceObservation extends DataClass
     }
     if (!nullToAbsent || isBulkDiscount != null) {
       map['is_bulk_discount'] = Variable<bool>(isBulkDiscount);
+    }
+    if (!nullToAbsent || isManualEntry != null) {
+      map['is_manual_entry'] = Variable<bool>(isManualEntry);
     }
     return map;
   }
@@ -769,6 +805,9 @@ class PriceObservation extends DataClass
       isBulkDiscount: isBulkDiscount == null && nullToAbsent
           ? const Value.absent()
           : Value(isBulkDiscount),
+      isManualEntry: isManualEntry == null && nullToAbsent
+          ? const Value.absent()
+          : Value(isManualEntry),
     );
   }
 
@@ -793,6 +832,7 @@ class PriceObservation extends DataClass
         json['isCouponPriceVisible'],
       ),
       isBulkDiscount: serializer.fromJson<bool?>(json['isBulkDiscount']),
+      isManualEntry: serializer.fromJson<bool?>(json['isManualEntry']),
     );
   }
   @override
@@ -810,6 +850,7 @@ class PriceObservation extends DataClass
       'isMemberPriceVisible': serializer.toJson<bool?>(isMemberPriceVisible),
       'isCouponPriceVisible': serializer.toJson<bool?>(isCouponPriceVisible),
       'isBulkDiscount': serializer.toJson<bool?>(isBulkDiscount),
+      'isManualEntry': serializer.toJson<bool?>(isManualEntry),
     };
   }
 
@@ -825,6 +866,7 @@ class PriceObservation extends DataClass
     Value<bool?> isMemberPriceVisible = const Value.absent(),
     Value<bool?> isCouponPriceVisible = const Value.absent(),
     Value<bool?> isBulkDiscount = const Value.absent(),
+    Value<bool?> isManualEntry = const Value.absent(),
   }) => PriceObservation(
     id: id ?? this.id,
     productId: productId ?? this.productId,
@@ -845,6 +887,9 @@ class PriceObservation extends DataClass
     isBulkDiscount: isBulkDiscount.present
         ? isBulkDiscount.value
         : this.isBulkDiscount,
+    isManualEntry: isManualEntry.present
+        ? isManualEntry.value
+        : this.isManualEntry,
   );
   PriceObservation copyWithCompanion(PriceObservationsCompanion data) {
     return PriceObservation(
@@ -873,6 +918,9 @@ class PriceObservation extends DataClass
       isBulkDiscount: data.isBulkDiscount.present
           ? data.isBulkDiscount.value
           : this.isBulkDiscount,
+      isManualEntry: data.isManualEntry.present
+          ? data.isManualEntry.value
+          : this.isManualEntry,
     );
   }
 
@@ -889,7 +937,8 @@ class PriceObservation extends DataClass
           ..write('isSaleVisible: $isSaleVisible, ')
           ..write('isMemberPriceVisible: $isMemberPriceVisible, ')
           ..write('isCouponPriceVisible: $isCouponPriceVisible, ')
-          ..write('isBulkDiscount: $isBulkDiscount')
+          ..write('isBulkDiscount: $isBulkDiscount, ')
+          ..write('isManualEntry: $isManualEntry')
           ..write(')'))
         .toString();
   }
@@ -907,6 +956,7 @@ class PriceObservation extends DataClass
     isMemberPriceVisible,
     isCouponPriceVisible,
     isBulkDiscount,
+    isManualEntry,
   );
   @override
   bool operator ==(Object other) =>
@@ -922,7 +972,8 @@ class PriceObservation extends DataClass
           other.isSaleVisible == this.isSaleVisible &&
           other.isMemberPriceVisible == this.isMemberPriceVisible &&
           other.isCouponPriceVisible == this.isCouponPriceVisible &&
-          other.isBulkDiscount == this.isBulkDiscount);
+          other.isBulkDiscount == this.isBulkDiscount &&
+          other.isManualEntry == this.isManualEntry);
 }
 
 class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
@@ -937,6 +988,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
   final Value<bool?> isMemberPriceVisible;
   final Value<bool?> isCouponPriceVisible;
   final Value<bool?> isBulkDiscount;
+  final Value<bool?> isManualEntry;
   final Value<int> rowid;
   const PriceObservationsCompanion({
     this.id = const Value.absent(),
@@ -950,6 +1002,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
     this.isMemberPriceVisible = const Value.absent(),
     this.isCouponPriceVisible = const Value.absent(),
     this.isBulkDiscount = const Value.absent(),
+    this.isManualEntry = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   PriceObservationsCompanion.insert({
@@ -964,6 +1017,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
     this.isMemberPriceVisible = const Value.absent(),
     this.isCouponPriceVisible = const Value.absent(),
     this.isBulkDiscount = const Value.absent(),
+    this.isManualEntry = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        productId = Value(productId),
@@ -983,6 +1037,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
     Expression<bool>? isMemberPriceVisible,
     Expression<bool>? isCouponPriceVisible,
     Expression<bool>? isBulkDiscount,
+    Expression<bool>? isManualEntry,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -999,6 +1054,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
       if (isCouponPriceVisible != null)
         'is_coupon_price_visible': isCouponPriceVisible,
       if (isBulkDiscount != null) 'is_bulk_discount': isBulkDiscount,
+      if (isManualEntry != null) 'is_manual_entry': isManualEntry,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1015,6 +1071,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
     Value<bool?>? isMemberPriceVisible,
     Value<bool?>? isCouponPriceVisible,
     Value<bool?>? isBulkDiscount,
+    Value<bool?>? isManualEntry,
     Value<int>? rowid,
   }) {
     return PriceObservationsCompanion(
@@ -1029,6 +1086,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
       isMemberPriceVisible: isMemberPriceVisible ?? this.isMemberPriceVisible,
       isCouponPriceVisible: isCouponPriceVisible ?? this.isCouponPriceVisible,
       isBulkDiscount: isBulkDiscount ?? this.isBulkDiscount,
+      isManualEntry: isManualEntry ?? this.isManualEntry,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1073,6 +1131,9 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
     if (isBulkDiscount.present) {
       map['is_bulk_discount'] = Variable<bool>(isBulkDiscount.value);
     }
+    if (isManualEntry.present) {
+      map['is_manual_entry'] = Variable<bool>(isManualEntry.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1093,6 +1154,7 @@ class PriceObservationsCompanion extends UpdateCompanion<PriceObservation> {
           ..write('isMemberPriceVisible: $isMemberPriceVisible, ')
           ..write('isCouponPriceVisible: $isCouponPriceVisible, ')
           ..write('isBulkDiscount: $isBulkDiscount, ')
+          ..write('isManualEntry: $isManualEntry, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1446,6 +1508,7 @@ typedef $$PriceObservationsTableCreateCompanionBuilder =
       Value<bool?> isMemberPriceVisible,
       Value<bool?> isCouponPriceVisible,
       Value<bool?> isBulkDiscount,
+      Value<bool?> isManualEntry,
       Value<int> rowid,
     });
 typedef $$PriceObservationsTableUpdateCompanionBuilder =
@@ -1461,6 +1524,7 @@ typedef $$PriceObservationsTableUpdateCompanionBuilder =
       Value<bool?> isMemberPriceVisible,
       Value<bool?> isCouponPriceVisible,
       Value<bool?> isBulkDiscount,
+      Value<bool?> isManualEntry,
       Value<int> rowid,
     });
 
@@ -1555,6 +1619,11 @@ class $$PriceObservationsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<bool> get isManualEntry => $composableBuilder(
+    column: $table.isManualEntry,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$ProductIdentitysTableFilterComposer get productId {
     final $$ProductIdentitysTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -1638,6 +1707,11 @@ class $$PriceObservationsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isManualEntry => $composableBuilder(
+    column: $table.isManualEntry,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$ProductIdentitysTableOrderingComposer get productId {
     final $$ProductIdentitysTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -1715,6 +1789,11 @@ class $$PriceObservationsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<bool> get isManualEntry => $composableBuilder(
+    column: $table.isManualEntry,
+    builder: (column) => column,
+  );
+
   $$ProductIdentitysTableAnnotationComposer get productId {
     final $$ProductIdentitysTableAnnotationComposer composer = $composerBuilder(
       composer: this,
@@ -1783,6 +1862,7 @@ class $$PriceObservationsTableTableManager
                 Value<bool?> isMemberPriceVisible = const Value.absent(),
                 Value<bool?> isCouponPriceVisible = const Value.absent(),
                 Value<bool?> isBulkDiscount = const Value.absent(),
+                Value<bool?> isManualEntry = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PriceObservationsCompanion(
                 id: id,
@@ -1796,6 +1876,7 @@ class $$PriceObservationsTableTableManager
                 isMemberPriceVisible: isMemberPriceVisible,
                 isCouponPriceVisible: isCouponPriceVisible,
                 isBulkDiscount: isBulkDiscount,
+                isManualEntry: isManualEntry,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1811,6 +1892,7 @@ class $$PriceObservationsTableTableManager
                 Value<bool?> isMemberPriceVisible = const Value.absent(),
                 Value<bool?> isCouponPriceVisible = const Value.absent(),
                 Value<bool?> isBulkDiscount = const Value.absent(),
+                Value<bool?> isManualEntry = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PriceObservationsCompanion.insert(
                 id: id,
@@ -1824,6 +1906,7 @@ class $$PriceObservationsTableTableManager
                 isMemberPriceVisible: isMemberPriceVisible,
                 isCouponPriceVisible: isCouponPriceVisible,
                 isBulkDiscount: isBulkDiscount,
+                isManualEntry: isManualEntry,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

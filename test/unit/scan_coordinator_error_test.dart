@@ -345,6 +345,7 @@ class _BrokenRepository implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     throw Exception(
       'SqliteException(13): database or disk is full, SQLITE_FULL',
@@ -361,6 +362,7 @@ class _BrokenRepository implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     throw Exception(
       'SqliteException(13): database or disk is full, SQLITE_FULL',

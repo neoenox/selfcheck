@@ -369,6 +369,7 @@ class _GatedObservationsRepository implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) => _delegate.insertObservation(
     productId: productId,
     priceYen: priceYen,
@@ -377,6 +378,7 @@ class _GatedObservationsRepository implements PriceRepository {
     isMemberPriceVisible: isMemberPriceVisible,
     isCouponPriceVisible: isCouponPriceVisible,
     isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
   );
 
   @override
@@ -400,6 +402,7 @@ class _GatedObservationsRepository implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) => _delegate.insertObservationWithDate(
     productId: productId,
     priceYen: priceYen,
@@ -409,6 +412,7 @@ class _GatedObservationsRepository implements PriceRepository {
     isMemberPriceVisible: isMemberPriceVisible,
     isCouponPriceVisible: isCouponPriceVisible,
     isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
   );
 
   @override
