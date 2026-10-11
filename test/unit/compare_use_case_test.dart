@@ -61,6 +61,41 @@ void main() {
       );
 
       test(
+        'manual entry flag reaches the result and the observation',
+        () async {
+          final product = await repository.createProvisionalProduct(
+            '4901234567891',
+          );
+
+          final result = await useCase.compare(
+            currentPriceYen: 350,
+            productId: product.id,
+            currentConfidence: 1.0,
+            isSaleVisible: true,
+            isManualEntry: true,
+          );
+
+          expect(result.status, domain.ComparisonStatus.firstPrice);
+          expect(result.isManualEntry, isTrue);
+
+          final observations = await repository.getValidObservations(
+            productId: product.id,
+            since: DateTime.now().subtract(const Duration(minutes: 1)),
+            limit: 10,
+          );
+          expect(observations.single.isManualEntry, isTrue);
+          expect(observations.single.isSaleVisible, isTrue);
+
+          final ocrResult = await useCase.compare(
+            currentPriceYen: 398,
+            productId: product.id,
+            currentConfidence: 0.9,
+          );
+          expect(ocrResult.isManualEntry, isFalse);
+        },
+      );
+
+      test(
         'historyShort - returns historyShort when 1-2 observations',
         () async {
           final product = await repository.createProvisionalProduct(
