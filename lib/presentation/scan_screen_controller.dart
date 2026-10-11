@@ -164,6 +164,32 @@ class ScanScreenController extends ChangeNotifier {
   /// JAN currently awaiting a price, if a barcode was already recognized.
   String? get pendingJanCode => _coordinator.pendingJanCode;
 
+  /// Corrects the latest saved observation for the current JAN.
+  /// Returns false when there is nothing to correct or the entry invalid.
+  Future<bool> correctLatestPrice({
+    String? janCode,
+    required int priceYen,
+    required bool isTaxInclusive,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+  }) {
+    final jan = janCode ?? _uiState.janCode;
+    if (jan == null) return Future.value(false);
+    return _coordinator.correctLatestObservation(
+      jan: jan,
+      entry: ManualPriceEntry(
+        priceYen: priceYen,
+        isTaxInclusive: isTaxInclusive,
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+      ),
+    );
+  }
+
   /// Submits a user-entered price. Returns false when the amount is invalid
   /// (empty/out of range/tax-exclusive) or no scan session can take it.
   bool submitManualPrice({

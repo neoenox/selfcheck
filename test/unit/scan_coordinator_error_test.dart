@@ -371,6 +371,9 @@ class _BrokenRepository implements PriceRepository {
 
   @override
   void dispose() => _inner.dispose();
+
+  @override
+  Future<void> invalidateObservation(String id) async {}
 }
 
 /// Stream-based adapter (for manual control in tests)

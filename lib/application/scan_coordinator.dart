@@ -132,6 +132,58 @@ class ScanCoordinator {
     );
   }
 
+  /// Corrects the latest saved observation for [jan] with user-entered values.
+  ///
+  /// Only available once a scan settled (result) or is idle: it must never
+  /// interfere with an active recognition session. The previous latest
+  /// observation is invalidated (kept for audit) before the corrected value
+  /// is compared and saved, so the duplicate window cannot block the fix
+  /// and the wrong amount leaves the baseline. Returns false when there is
+  /// nothing to correct or the entry is invalid.
+  Future<bool> correctLatestObservation({
+    required String jan,
+    required ManualPriceEntry entry,
+  }) async {
+    if (_state != ScanState.result && _state != ScanState.idle) return false;
+    if (entry.priceYen < 1 || entry.priceYen > 99999 || !entry.isTaxInclusive) {
+      return false;
+    }
+
+    final product = await _repository.findProductByJan(jan);
+    if (product == null) return false;
+    final observations = await _repository.getValidObservations(
+      productId: product.id,
+      since: DateTime.fromMillisecondsSinceEpoch(0),
+      limit: 1,
+    );
+    if (observations.isEmpty) return false;
+
+    await _repository.invalidateObservation(observations.first.id);
+
+    final generation = _sessionGeneration;
+    await _compare(
+      BarcodeCandidate(
+        barcode: jan,
+        format: jan.length == 13
+            ? BarcodeFormat.ean13
+            : jan.length == 8
+            ? BarcodeFormat.ean8
+            : BarcodeFormat.unknown,
+        confidence: entry.confidence,
+        region: const Rect(left: 0, top: 0, right: 0, bottom: 0),
+      ),
+      entry.priceYen,
+      entry.confidence,
+      generation,
+      isSaleVisible: entry.isSaleVisible,
+      isMemberPriceVisible: entry.isMemberPriceVisible,
+      isCouponPriceVisible: entry.isCouponPriceVisible,
+      isBulkDiscount: entry.isBulkDiscount,
+      isManualEntry: true,
+    );
+    return _isCurrentSession(generation) && _state == ScanState.result;
+  }
+
   void cancelScan() {
     _transitionToIdle();
   }
