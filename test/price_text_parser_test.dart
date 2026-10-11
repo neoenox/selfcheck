@@ -174,6 +174,16 @@ void main() {
     );
   });
 
+  test('fails closed for member and tax-inclusive prices together', () {
+    expect(
+      parsePriceText([
+        (text: '会員 350円', region: region),
+        (text: '税込 429円', region: region),
+      ]),
+      isNull,
+    );
+  });
+
   test('selects a single sale price without guessing', () {
     final result = parsePriceText([(text: '特売 298円', region: region)]);
 
