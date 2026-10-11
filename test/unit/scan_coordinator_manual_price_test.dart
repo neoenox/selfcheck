@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:selfcheck_jibun_check/application/compare_use_case.dart';
 import 'package:selfcheck_jibun_check/application/scan_coordinator.dart';
+import 'package:selfcheck_jibun_check/domain/comparison_result.dart' as domain;
 import 'package:selfcheck_jibun_check/domain/scan_state.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
@@ -225,6 +226,133 @@ void main() {
       await _flush();
 
       expect(coordinator.pendingJanCode, _barcode.barcode);
+    });
+
+    test('repeated manual entry of the same price is de-duplicated', () async {
+      final results = <int>[];
+      coordinator.resultStream.listen(
+        (result) => results.add(result.currentPrice),
+      );
+
+      Future<List<int>> savedPrices() async {
+        final product = await repository.findProductByJan(_barcode.barcode);
+        expect(product, isNotNull);
+        final observations = await repository.getValidObservations(
+          productId: product!.id,
+          since: DateTime.now().subtract(const Duration(minutes: 1)),
+          limit: 10,
+        );
+        return [for (final o in observations) o.priceYen];
+      }
+
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+      expect(results, [350]);
+      expect(await savedPrices(), [350]);
+
+      coordinator.resetToIdle();
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+
+      expect(results, [350, 350]);
+      expect(await savedPrices(), [350]);
+    });
+  });
+
+  group('mixed price contexts in comparison', () {
+    late PriceRepository repository;
+    late _ControllableBarcodeAdapter barcodeAdapter;
+    late _ControllablePriceAdapter priceAdapter;
+    late ScanCoordinator coordinator;
+
+    setUp(() async {
+      repository = await createTestRepository();
+      barcodeAdapter = _ControllableBarcodeAdapter();
+      priceAdapter = _ControllablePriceAdapter();
+      coordinator = ScanCoordinator(
+        repository: repository,
+        compareUseCase: CompareUseCase(repository),
+        barcodeAdapter: barcodeAdapter,
+        priceAdapter: priceAdapter,
+      );
+    });
+
+    tearDown(() async {
+      coordinator.dispose();
+      repository.dispose();
+      await barcodeAdapter.close();
+      await priceAdapter.close();
+    });
+
+    Future<domain.ComparisonResult> scanOcrPrice(int value) async {
+      final done = coordinator.resultStream.first;
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.addFrame([_price(value)]);
+        await _flush();
+      }
+      return done.timeout(const Duration(seconds: 2));
+    }
+
+    test('sale and regular observations share one baseline', () async {
+      final results = <domain.ComparisonResult>[];
+      coordinator.resultStream.listen(results.add);
+
+      // Session 1: manual sale price, no history yet.
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+      expect(results.single.status, domain.ComparisonStatus.firstPrice);
+
+      // Session 2: regular OCR price compares against the sale baseline.
+      // Contexts intentionally share one baseline in the current design;
+      // this test pins the arithmetic so a future context-aware change is
+      // a deliberate spec change, not a silent drift.
+      coordinator.resetToIdle();
+      coordinator.startScan();
+      final second = await scanOcrPrice(398);
+      expect(second.status, domain.ComparisonStatus.historyShort);
+      expect(second.baselineMedianYen, 350);
+      expect(second.diffYen, 48);
+      expect(second.label, domain.ComparisonLabel.expensive);
+
+      // Session 3: median of sale + regular.
+      coordinator.resetToIdle();
+      coordinator.startScan();
+      final third = await scanOcrPrice(450);
+      expect(third.status, domain.ComparisonStatus.historyShort);
+      expect(third.baselineMedianYen, 374);
+      expect(third.observationCount, 2);
+
+      // Session 4: full baseline across mixed contexts.
+      coordinator.resetToIdle();
+      coordinator.startScan();
+      final fourth = await scanOcrPrice(500);
+      expect(fourth.status, domain.ComparisonStatus.withBaseline);
+      expect(fourth.baselineMedianYen, 398);
+      expect(fourth.diffYen, 102);
+      expect(fourth.label, domain.ComparisonLabel.expensive);
+
+      final product = await repository.findProductByJan(_barcode.barcode);
+      final observations = await repository.getValidObservations(
+        productId: product!.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.map((o) => o.priceYen).toSet(), {350, 398, 450, 500});
+      expect(
+        observations.where((o) => o.priceYen == 350).single.isManualEntry,
+        isTrue,
+      );
     });
   });
 }
