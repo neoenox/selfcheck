@@ -228,6 +228,66 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  Future<PriceObservation?> findObservationById(String id) async {
+    return (select(
+      priceObservations,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+  }
+
+  /// Correct an already-saved observation (issue #90).
+  ///
+  /// Invalidates the original row (kept for audit, never hard-deleted) and
+  /// inserts the corrected amount+type as a new valid row. The retired
+  /// duplicate slot is freed by [invalidateObservation] so the correction can
+  /// reuse the same five-minute bucket. Throws [StateError] when the target
+  /// is missing or already invalid.
+  Future<PriceObservation> correctObservation({
+    required String observationId,
+    required int correctedPriceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+    DateTime? correctedAt,
+  }) async {
+    return transaction(() async {
+      final original = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(observationId))).getSingleOrNull();
+      if (original == null) {
+        throw StateError('Price observation not found: $observationId');
+      }
+      if (!original.isValid) {
+        throw StateError('Price observation already invalid: $observationId');
+      }
+
+      await invalidateObservation(observationId);
+
+      var observedAt = correctedAt ?? DateTime.now();
+      // Guard the derived row id against colliding with the retained
+      // original when the same price is re-saved at the same instant.
+      if (correctedPriceYen == original.priceYen &&
+          observedAt.microsecondsSinceEpoch ==
+              original.observedAt.microsecondsSinceEpoch) {
+        observedAt = observedAt.add(const Duration(microseconds: 1));
+      }
+
+      return _insertObservation(
+        productId: original.productId,
+        priceYen: correctedPriceYen,
+        priceConfidence: priceConfidence,
+        observedAt: observedAt,
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+        isManualEntry: isManualEntry,
+      );
+    });
+  }
+
   /// Insert an observation with a specific observedAt date (for testing).
   /// Allows creating observations in the past to test time-window filtering.
   Future<PriceObservation> insertObservationWithDate({

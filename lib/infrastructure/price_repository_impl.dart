@@ -68,6 +68,36 @@ class PriceRepositoryImpl implements PriceRepository {
   }
 
   @override
+  Future<PriceObservation?> findObservationById(String id) async {
+    return _database.findObservationById(id);
+  }
+
+  @override
+  Future<PriceObservation> correctObservation({
+    required String observationId,
+    required int correctedPriceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+    DateTime? correctedAt,
+  }) async {
+    return _database.correctObservation(
+      observationId: observationId,
+      correctedPriceYen: correctedPriceYen,
+      priceConfidence: priceConfidence,
+      isSaleVisible: isSaleVisible,
+      isMemberPriceVisible: isMemberPriceVisible,
+      isCouponPriceVisible: isCouponPriceVisible,
+      isBulkDiscount: isBulkDiscount,
+      isManualEntry: isManualEntry,
+      correctedAt: correctedAt,
+    );
+  }
+
+  @override
   Future<PriceObservation> insertObservationWithDate({
     required String productId,
     required int priceYen,
