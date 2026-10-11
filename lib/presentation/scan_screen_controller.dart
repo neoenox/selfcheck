@@ -15,6 +15,14 @@ class ScanScreenUiState {
   final bool isSaving;
   final String? errorMessage;
 
+  /// Transient recognition warning shown while scanning continues.
+  ///
+  /// Unlike [errorMessage] (shown only in [ScanState.error]), this is
+  /// displayed during [ScanState.scanning]/[ScanState.waitingPrice] so
+  /// sustained camera/ML Kit failures are visible instead of leaving the
+  /// user waiting on an endless "recognizing" indicator.
+  final String? warningMessage;
+
   const ScanScreenUiState({
     this.scanState = ScanState.idle,
     this.janCode,
@@ -22,7 +30,11 @@ class ScanScreenUiState {
     this.comparisonResult,
     this.isSaving = false,
     this.errorMessage,
+    this.warningMessage,
   });
+
+  /// Sentinel distinguishing "not passed" from an explicit `null` (clear).
+  static const _unchanged = Object();
 
   ScanScreenUiState copyWith({
     ScanState? scanState,
@@ -30,7 +42,8 @@ class ScanScreenUiState {
     int? currentPriceYen,
     ComparisonResult? comparisonResult,
     bool? isSaving,
-    String? errorMessage,
+    Object? errorMessage = _unchanged,
+    Object? warningMessage = _unchanged,
   }) {
     return ScanScreenUiState(
       scanState: scanState ?? this.scanState,
@@ -38,7 +51,12 @@ class ScanScreenUiState {
       currentPriceYen: currentPriceYen ?? this.currentPriceYen,
       comparisonResult: comparisonResult ?? this.comparisonResult,
       isSaving: isSaving ?? this.isSaving,
-      errorMessage: errorMessage ?? this.errorMessage,
+      errorMessage: errorMessage == _unchanged
+          ? this.errorMessage
+          : errorMessage as String?,
+      warningMessage: warningMessage == _unchanged
+          ? this.warningMessage
+          : warningMessage as String?,
     );
   }
 
@@ -49,6 +67,10 @@ class ScanScreenUiState {
       scanState == ScanState.scanning || scanState == ScanState.waitingPrice;
   bool get isShowingResult => scanState == ScanState.result;
   bool get isError => scanState == ScanState.error;
+
+  /// Whether a transient recognition warning should be shown.
+  bool get hasTransientWarning =>
+      warningMessage != null && !isError && isScanning;
 }
 
 /// ChangeNotifier that exposes scan screen state to widgets.
@@ -62,6 +84,7 @@ class ScanScreenController extends ChangeNotifier {
   StreamSubscription<ScanState>? _stateSubscription;
   StreamSubscription<ComparisonResult>? _resultSubscription;
   StreamSubscription<String?>? _errorSubscription;
+  StreamSubscription<String?>? _warningSubscription;
 
   ScanScreenUiState _uiState = const ScanScreenUiState();
   ScanScreenUiState get uiState => _uiState;
@@ -89,10 +112,19 @@ class ScanScreenController extends ChangeNotifier {
         notifyListeners();
       }
     });
+
+    _warningSubscription = _coordinator.warningStream.listen((message) {
+      _uiState = _uiState.copyWith(warningMessage: message);
+      notifyListeners();
+    });
   }
 
   void _onScanStateChanged(ScanState state) {
-    _uiState = _uiState.copyWith(scanState: state, errorMessage: null);
+    _uiState = _uiState.copyWith(
+      scanState: state,
+      errorMessage: null,
+      warningMessage: null,
+    );
 
     if (state == ScanState.result) {
       _uiState = _uiState.copyWith(isSaving: false);
@@ -132,6 +164,7 @@ class ScanScreenController extends ChangeNotifier {
     _stateSubscription?.cancel();
     _resultSubscription?.cancel();
     _errorSubscription?.cancel();
+    _warningSubscription?.cancel();
     super.dispose();
   }
 }

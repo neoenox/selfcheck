@@ -28,6 +28,15 @@ class ScanCoordinator {
   String? _lastError;
   String? get lastError => _lastError;
 
+  /// Last transient recognition warning (kept while scanning continues).
+  ///
+  /// Adapter stream errors are transient by default: the scan session keeps
+  /// running and the UI surfaces this warning without leaving the scanning
+  /// state. Fatal adapter errors escalate to [ScanState.error] instead and
+  /// are additionally reported through [lastError]/[errorStream].
+  String? _lastWarning;
+  String? get lastWarning => _lastWarning;
+
   /// JAN associated with the most recently completed comparison result.
   String? _resultJanCode;
   String? get resultJanCode => _resultJanCode;
@@ -41,10 +50,17 @@ class ScanCoordinator {
       StreamController<ComparisonResult>.broadcast();
   final StreamController<String?> _errorController =
       StreamController<String?>.broadcast();
+  final StreamController<String?> _warningController =
+      StreamController<String?>.broadcast();
 
   Stream<ScanState> get stateStream => _stateController.stream;
   Stream<ComparisonResult> get resultStream => _resultController.stream;
   Stream<String?> get errorStream => _errorController.stream;
+
+  /// Transient recognition warnings. Emitted while the scan session keeps
+  /// running; a `null` event means a previously reported warning was cleared
+  /// after recovery (or because the session ended).
+  Stream<String?> get warningStream => _warningController.stream;
 
   ScanState get currentState => _state;
 
@@ -73,6 +89,7 @@ class ScanCoordinator {
 
     _state = ScanState.scanning;
     _lastError = null;
+    _lastWarning = null;
     _stateController.add(_state);
 
     _barcodeSubscription = _barcodeAdapter.results.listen(
@@ -123,6 +140,7 @@ class ScanCoordinator {
     _barcodeAdapter.pause();
     _priceAdapter.pause();
     _lastError = null;
+    _clearWarning();
     _state = ScanState.idle;
     _stateController.add(_state);
   }
@@ -130,6 +148,7 @@ class ScanCoordinator {
   void _onBarcodeDetected(BarcodeCandidate barcode, int generation) {
     if (!_isCurrentSession(generation) || _state != ScanState.scanning) return;
 
+    _clearWarning();
     _barcodeAdapter.pause();
     _priceAdapter.pause();
 
@@ -164,6 +183,9 @@ class ScanCoordinator {
       return;
     }
 
+    // A readable price frame means recognition recovered; drop any stale
+    // transient warning so it does not linger after recovery.
+    _clearWarning();
     final isStable = _stabilizer.submit(price);
     if (!isStable) return;
 
@@ -244,6 +266,7 @@ class ScanCoordinator {
       _resultController.add(result);
       _cancelSubscriptions();
       _resetRecognitionContext();
+      _clearWarning();
       _barcodeAdapter.pause();
       _priceAdapter.pause();
       _state = ScanState.result;
@@ -263,17 +286,25 @@ class ScanCoordinator {
     debugPrint('ScanCoordinator._compare failed: $error');
     debugPrint('$stackTrace');
 
-    final message = _friendlyErrorMessage(error);
+    _transitionToError(_friendlyErrorMessage(error));
+  }
+
+  /// Moves the session into [ScanState.error] with [message].
+  ///
+  /// The state event is emitted before the error event so UI listeners that
+  /// clear stale messages on state transitions still display the new error.
+  void _transitionToError(String message) {
     _lastError = message;
-    _errorController.add(message);
 
     _cancelSubscriptions();
     _resetRecognitionContext();
+    _clearWarning();
     _resultJanCode = null;
     _barcodeAdapter.pause();
     _priceAdapter.pause();
     _state = ScanState.error;
     _stateController.add(_state);
+    _errorController.add(message);
   }
 
   void _handleAdapterError(
@@ -288,12 +319,39 @@ class ScanCoordinator {
     debugPrint('$stackTrace');
 
     final message = '$context: ${_friendlyErrorMessage(error)}';
-    _lastError = message;
-    _errorController.add(message);
+    if (_isFatalAdapterError(error)) {
+      // Fatal adapter errors (e.g. camera permission denied) can never
+      // recover by retrying frames: stop the scan and surface the error
+      // immediately through the same path as compare failures.
+      _transitionToError(message);
+      return;
+    }
 
-    // Adapter stream errors can be transient. Keep the current state/session;
-    // a fatal adapter implementation should close its stream or be surfaced by
-    // a higher-level lifecycle owner.
+    // Transient adapter stream errors keep the current state/session so a
+    // single bad frame does not stop the scan. The warning is surfaced
+    // through warningStream (shown while scanning); errorStream keeps
+    // receiving the message for backward compatibility with existing
+    // error listeners.
+    _lastError = message;
+    _lastWarning = message;
+    _errorController.add(message);
+    _warningController.add(message);
+  }
+
+  /// Clears a previously reported transient warning, notifying UI listeners
+  /// so a stale warning does not linger after recognition recovered.
+  void _clearWarning() {
+    if (_lastWarning == null) return;
+    _lastWarning = null;
+    if (!_warningController.isClosed) {
+      _warningController.add(null);
+    }
+  }
+
+  bool _isFatalAdapterError(Object error) {
+    final text = error.toString();
+    return text.contains('Permission denied') ||
+        text.contains('CameraAccessDenied');
   }
 
   String _friendlyErrorMessage(Object error) {
@@ -307,7 +365,8 @@ class ScanCoordinator {
     if (text.contains('SqliteException') || text.contains('database')) {
       return 'データベースエラーが発生しました。もう一度お試しください。';
     }
-    if (text.contains('Permission denied')) {
+    if (text.contains('Permission denied') ||
+        text.contains('CameraAccessDenied')) {
       return 'カメラの権限が必要です。設定から許可してください。';
     }
     return '予期せぬエラーが発生しました。もう一度お試しください。';
@@ -342,6 +401,7 @@ class ScanCoordinator {
     _stateController.close();
     _resultController.close();
     _errorController.close();
+    _warningController.close();
   }
 }
 
