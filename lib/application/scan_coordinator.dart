@@ -44,6 +44,14 @@ class ScanCoordinator {
   /// Cached barcode candidate while waiting for a stable price.
   BarcodeCandidate? _pendingBarcode;
 
+  /// JAN awaiting a price, exposed so a manual entry can be confirmed
+  /// against it before saving.
+  String? get pendingJanCode => _pendingBarcode?.barcode;
+
+  /// User-entered price awaiting comparison. Takes precedence over OCR
+  /// candidates but never bypasses JAN association or persistence rules.
+  ManualPriceEntry? _manualEntry;
+
   final StreamController<ScanState> _stateController =
       StreamController<ScanState>.broadcast();
   final StreamController<ComparisonResult> _resultController =
@@ -83,6 +91,7 @@ class ScanCoordinator {
 
     _cancelSubscriptions();
     _resetRecognitionContext();
+    _manualEntry = null;
     _resultJanCode = null;
     _barcodeAdapter.resume();
     _priceAdapter.resume();
@@ -127,6 +136,47 @@ class ScanCoordinator {
     _transitionToIdle();
   }
 
+  /// Submits a user-entered price for the current session.
+  ///
+  /// Accepted in scanning/waitingPrice/noProduct states with a valid amount
+  /// (1–99,999 yen, tax-inclusive only). Tax-exclusive manual entries are
+  /// rejected: without a known tax rate they cannot be converted, and saving
+  /// them would corrupt the tax-inclusive history.
+  ///
+  /// When the barcode is already pending, comparison starts immediately.
+  /// Otherwise the entry is cached and used as soon as a barcode arrives,
+  /// taking precedence over later OCR candidates.
+  bool submitManualPrice(ManualPriceEntry entry) {
+    if (_state != ScanState.scanning &&
+        _state != ScanState.waitingPrice &&
+        _state != ScanState.noProduct) {
+      return false;
+    }
+    if (entry.priceYen < 1 || entry.priceYen > 99999 || !entry.isTaxInclusive) {
+      return false;
+    }
+
+    _manualEntry = entry;
+    if (_state == ScanState.waitingPrice && _pendingBarcode != null) {
+      final barcode = _pendingBarcode!;
+      _manualEntry = null;
+      unawaited(
+        _compare(
+          barcode,
+          entry.priceYen,
+          entry.confidence,
+          _sessionGeneration,
+          isSaleVisible: entry.isSaleVisible,
+          isMemberPriceVisible: entry.isMemberPriceVisible,
+          isCouponPriceVisible: entry.isCouponPriceVisible,
+          isBulkDiscount: entry.isBulkDiscount,
+          isManualEntry: true,
+        ),
+      );
+    }
+    return true;
+  }
+
   /// Reset a completed/error session so the UI can start another scan.
   void resetToIdle() {
     _transitionToIdle();
@@ -136,6 +186,7 @@ class ScanCoordinator {
     _sessionGeneration++;
     _cancelSubscriptions();
     _resetRecognitionContext();
+    _manualEntry = null;
     _resultJanCode = null;
     _barcodeAdapter.pause();
     _priceAdapter.pause();
@@ -151,6 +202,26 @@ class ScanCoordinator {
     _clearWarning();
     _barcodeAdapter.pause();
     _priceAdapter.pause();
+
+    // A user-confirmed manual price wins over any OCR candidate.
+    final manual = _manualEntry;
+    if (manual != null) {
+      _manualEntry = null;
+      unawaited(
+        _compare(
+          barcode,
+          manual.priceYen,
+          manual.confidence,
+          generation,
+          isSaleVisible: manual.isSaleVisible,
+          isMemberPriceVisible: manual.isMemberPriceVisible,
+          isCouponPriceVisible: manual.isCouponPriceVisible,
+          isBulkDiscount: manual.isBulkDiscount,
+          isManualEntry: true,
+        ),
+      );
+      return;
+    }
 
     // Prefer the top-ranked stable candidate that is safely associated
     // with this JAN. A higher-ranked distant price (e.g. a neighboring
@@ -195,6 +266,23 @@ class ScanCoordinator {
     _priceAdapter.pause();
 
     if (_state == ScanState.waitingPrice && _pendingBarcode != null) {
+      // A user-confirmed manual price wins over any OCR candidate.
+      final manual = _manualEntry;
+      if (manual != null) {
+        _manualEntry = null;
+        await _compare(
+          _pendingBarcode!,
+          manual.priceYen,
+          manual.confidence,
+          generation,
+          isSaleVisible: manual.isSaleVisible,
+          isMemberPriceVisible: manual.isMemberPriceVisible,
+          isCouponPriceVisible: manual.isCouponPriceVisible,
+          isBulkDiscount: manual.isBulkDiscount,
+          isManualEntry: true,
+        );
+        return;
+      }
       // Select from the stable candidates associated with the pending JAN.
       // Rejecting a distant price must not hide an associated nearby one.
       final associated = _stabilizer.stableCandidates
@@ -238,8 +326,13 @@ class ScanCoordinator {
     BarcodeCandidate barcode,
     int priceYen,
     double confidence,
-    int generation,
-  ) async {
+    int generation, {
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) async {
     if (!_isCurrentSession(generation)) return;
 
     _state = ScanState.comparing;
@@ -265,6 +358,11 @@ class ScanCoordinator {
         currentConfidence: confidence,
         skipInsert: isDuplicate,
         isSessionValid: () => _isCurrentSession(generation),
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+        isManualEntry: isManualEntry,
       );
       if (!_isCurrentSession(generation)) return;
 
@@ -427,4 +525,35 @@ abstract class PriceOcrAdapter {
   Stream<List<PriceCandidate>> get results;
   void pause();
   void resume();
+}
+
+/// Confidence recorded for user-confirmed manual prices.
+///
+/// OCR candidates carry estimator confidences (0.70–0.90); a manual entry was
+/// verified by a human, so it is recorded at full confidence alongside
+/// [ManualPriceEntry.isManualEntry].
+const double kManualPriceConfidence = 1.0;
+
+/// A user-entered price awaiting comparison.
+///
+/// [isTaxInclusive] must be true: tax-exclusive amounts cannot be converted
+/// without a known rate, so they are rejected rather than saved.
+class ManualPriceEntry {
+  const ManualPriceEntry({
+    required this.priceYen,
+    this.confidence = kManualPriceConfidence,
+    required this.isTaxInclusive,
+    this.isSaleVisible,
+    this.isMemberPriceVisible,
+    this.isCouponPriceVisible,
+    this.isBulkDiscount,
+  });
+
+  final int priceYen;
+  final double confidence;
+  final bool isTaxInclusive;
+  final bool? isSaleVisible;
+  final bool? isMemberPriceVisible;
+  final bool? isCouponPriceVisible;
+  final bool? isBulkDiscount;
 }

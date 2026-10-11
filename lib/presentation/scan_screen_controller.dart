@@ -161,10 +161,29 @@ class ScanScreenController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Manually enter a price (for when OCR fails)
-  void manualPriceEntry(int priceYen) {
-    _uiState = _uiState.copyWith(currentPriceYen: priceYen);
-    notifyListeners();
+  /// JAN currently awaiting a price, if a barcode was already recognized.
+  String? get pendingJanCode => _coordinator.pendingJanCode;
+
+  /// Submits a user-entered price. Returns false when the amount is invalid
+  /// (empty/out of range/tax-exclusive) or no scan session can take it.
+  bool submitManualPrice({
+    required int priceYen,
+    required bool isTaxInclusive,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+  }) {
+    return _coordinator.submitManualPrice(
+      ManualPriceEntry(
+        priceYen: priceYen,
+        isTaxInclusive: isTaxInclusive,
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+      ),
+    );
   }
 
   @override

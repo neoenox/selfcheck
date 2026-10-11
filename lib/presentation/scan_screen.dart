@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../domain/scan_state.dart';
 import 'scan_screen_controller.dart';
+import 'widgets/manual_price_sheet.dart';
 import 'widgets/price_context_badges.dart';
 import 'widgets/result_card.dart';
 import 'widgets/scan_overlay.dart';
@@ -45,6 +46,18 @@ class _ScanScreenState extends State<ScanScreen>
 
   void _onStateChanged() {
     setState(() {});
+  }
+
+  Future<void> _openManualPriceSheet(BuildContext context) async {
+    final outcome = await showManualPriceSheet(context, widget.controller);
+    if (outcome != null &&
+        outcome.saved &&
+        !outcome.janKnown &&
+        context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('バーコードをスキャンすると自動で保存されます')));
+    }
   }
 
   @override
@@ -217,6 +230,17 @@ class _ScanScreenState extends State<ScanScreen>
                     style: TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ),
+              if (state.isScanning)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: TextButton(
+                    onPressed: () => _openManualPriceSheet(context),
+                    child: const Text(
+                      '価格を手入力',
+                      style: TextStyle(color: Colors.white70, fontSize: 13),
+                    ),
+                  ),
+                ),
               if (state.canStartScan) _buildScanButton(),
               if (state.isShowingResult) ...[
                 const SizedBox(height: 8),
@@ -252,58 +276,57 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Widget _buildResultOverlay(ScanScreenUiState state) {
-    return Positioned(
-      bottom: 0,
-      left: 0,
-      right: 0,
-      child: DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.3,
-        maxChildSize: 0.85,
-        builder: (context, scrollController) {
-          return Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            child: ListView(
-              controller: scrollController,
-              padding: const EdgeInsets.only(top: 8),
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
+    // DraggableScrollableSheet requires bounded height constraints, so it is
+    // placed as a direct Stack child (loose bounded constraints) rather than
+    // inside a bottom-anchored Positioned, which would give it an infinite
+    // height and fail layout.
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.3,
+      maxChildSize: 0.85,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.only(top: 8),
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                if (state.comparisonResult != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: PriceContextBadges(
-                      isSaleVisible: false,
-                      isMemberPriceVisible: false,
-                    ),
+              ),
+              if (state.comparisonResult != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: PriceContextBadges(
+                    isSaleVisible: false,
+                    isMemberPriceVisible: false,
                   ),
-                ResultCard(
-                  result: state.comparisonResult!,
-                  janCode: state.janCode,
-                  onDismiss: () => widget.controller.dismissResult(),
-                  onScanAgain: () {
-                    widget.controller.dismissResult();
-                    widget.controller.startScan();
-                  },
                 ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          );
-        },
-      ),
+              ResultCard(
+                result: state.comparisonResult!,
+                janCode: state.janCode,
+                onDismiss: () => widget.controller.dismissResult(),
+                onScanAgain: () {
+                  widget.controller.dismissResult();
+                  widget.controller.startScan();
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
     );
   }
 }

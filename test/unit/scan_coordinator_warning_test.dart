@@ -279,6 +279,7 @@ class _DelayedRepository implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) => _inner.insertObservation(
     productId: productId,
     priceYen: priceYen,
@@ -287,6 +288,7 @@ class _DelayedRepository implements PriceRepository {
     isMemberPriceVisible: isMemberPriceVisible,
     isCouponPriceVisible: isCouponPriceVisible,
     isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
   );
 
   @override
@@ -310,6 +312,7 @@ class _DelayedRepository implements PriceRepository {
     bool? isMemberPriceVisible,
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
+    bool? isManualEntry,
   }) => _inner.insertObservationWithDate(
     productId: productId,
     priceYen: priceYen,
@@ -319,6 +322,7 @@ class _DelayedRepository implements PriceRepository {
     isMemberPriceVisible: isMemberPriceVisible,
     isCouponPriceVisible: isCouponPriceVisible,
     isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
   );
 
   @override

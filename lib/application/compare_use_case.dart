@@ -17,12 +17,19 @@ class CompareUseCase {
   /// When [skipInsert] is true, the current observation is NOT saved to the
   /// database. Use this when the caller already determined this is a duplicate
   /// and wants to show the comparison without inflating the observation count.
+  /// Price context flags (including [isManualEntry]) are recorded with the
+  /// observation so manual entries stay distinguishable from OCR readings.
   Future<ComparisonResult> compare({
     required int currentPriceYen,
     required String productId,
     required double currentConfidence,
     bool skipInsert = false,
     bool Function()? isSessionValid,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
   }) async {
     // Fetch historical observations first (before inserting current)
     final since = DateTime.now().subtract(
@@ -46,6 +53,11 @@ class CompareUseCase {
         productId: productId,
         priceYen: currentPriceYen,
         priceConfidence: currentConfidence,
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+        isManualEntry: isManualEntry,
       );
     }
 
