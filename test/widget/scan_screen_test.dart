@@ -133,6 +133,37 @@ void main() {
       expect(find.text('4901234567890'), findsOneWidget);
     });
 
+    testWidgets('shows manual marker for manual entries', (tester) async {
+      final result = domain.ComparisonResult.firstPrice(
+        350,
+        isManualEntry: true,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: ResultCard(result: result)),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('¥350'), findsOneWidget);
+      expect(find.text('手入力'), findsOneWidget);
+    });
+
+    testWidgets('hides manual marker for OCR results', (tester) async {
+      final result = domain.ComparisonResult.firstPrice(398);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: ResultCard(result: result)),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('¥398'), findsOneWidget);
+      expect(find.text('手入力'), findsNothing);
+    });
+
     testWidgets('dismiss button calls onDismiss', (tester) async {
       bool dismissed = false;
       final result = domain.ComparisonResult.firstPrice(398);
