@@ -934,13 +934,14 @@ class _StreamPriceAdapter implements PriceOcrAdapter {
   _StreamPriceAdapter(this._stream);
 
   @override
-  Stream<PriceCandidate> get results => _stream
+  Stream<List<PriceCandidate>> get results => _stream
       .map((e) {
         if (_paused) return null;
         return e;
       })
       .where((e) => e != null)
-      .cast<PriceCandidate>();
+      .cast<PriceCandidate>()
+      .map((c) => [c]);
 
   @override
   void pause() => _paused = true;

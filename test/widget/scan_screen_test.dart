@@ -252,7 +252,7 @@ class _StubBarcodeAdapter implements BarcodeRecognizerAdapter {
 
 class _StubPriceOcrAdapter implements PriceOcrAdapter {
   @override
-  Stream<PriceCandidate> get results => const Stream.empty();
+  Stream<List<PriceCandidate>> get results => const Stream.empty();
 
   @override
   void pause() {}

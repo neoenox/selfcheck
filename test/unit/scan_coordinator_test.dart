@@ -98,13 +98,13 @@ class MockPriceOCRAdapter implements PriceOcrAdapter {
   MockPriceOCRAdapter(this._candidates);
 
   @override
-  Stream<PriceCandidate> get results async* {
+  Stream<List<PriceCandidate>> get results async* {
     for (final candidate in _candidates) {
       if (_paused) {
         await Future.delayed(const Duration(milliseconds: 10));
         _paused = false;
       }
-      yield candidate;
+      yield [candidate];
     }
   }
 

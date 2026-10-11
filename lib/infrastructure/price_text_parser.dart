@@ -65,7 +65,6 @@ PriceCandidate? parsePriceText(Iterable<({String text, Rect region})> lines) {
   final candidates = _extractCandidates(lines);
   if (candidates.isEmpty) return null;
   if (_isAmbiguousPriceContext(lines, candidates)) return null;
-
   _ParsedPrice? best;
   for (final candidate in candidates) {
     if (_isBetterCandidate(candidate, best)) {
@@ -80,6 +79,47 @@ PriceCandidate? parsePriceText(Iterable<({String text, Rect region})> lines) {
     region: best.region,
     rawTexts: [best.rawText],
   );
+}
+
+/// Returns every ranked price candidate from OCR lines with positions.
+///
+/// The ranking matches [parsePriceText] (tax-inclusive first, then
+/// currency-marked, then bare numbers; larger regions win ties), but all
+/// candidates are kept so a JAN-associated nearby price can still be
+/// selected after a higher-ranked distant price is rejected. Ambiguous
+/// multi-price results fail closed to an empty list, exactly like
+/// [parsePriceText] returns null, so ambiguity can never be bypassed by
+/// picking another candidate.
+List<PriceCandidate> parsePriceCandidates(
+  Iterable<({String text, Rect region})> lines,
+) {
+  final extracted = _extractCandidates(lines);
+  if (extracted.isEmpty) return [];
+  if (_isAmbiguousPriceContext(lines, extracted)) return [];
+
+  final indexed = extracted.indexed.toList();
+  indexed.sort((a, b) {
+    final rank = _compareParsedPrice(a.$2, b.$2);
+    if (rank != 0) return rank;
+    return a.$1.compareTo(b.$1);
+  });
+  return [
+    for (final entry in indexed)
+      PriceCandidate(
+        priceYen: entry.$2.value,
+        confidence: entry.$2.confidence,
+        region: entry.$2.region,
+        rawTexts: [entry.$2.rawText],
+      ),
+  ];
+}
+
+int _compareParsedPrice(_ParsedPrice a, _ParsedPrice b) {
+  if (a.priority != b.priority) return b.priority.compareTo(a.priority);
+  if (a.confidence != b.confidence) {
+    return b.confidence.compareTo(a.confidence);
+  }
+  return b.regionArea.compareTo(a.regionArea);
 }
 
 /// Returns true when price-context markers coexist with multiple distinct

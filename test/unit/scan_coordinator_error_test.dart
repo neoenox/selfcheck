@@ -391,7 +391,7 @@ class _StreamPriceAdapter implements PriceOcrAdapter {
   _StreamPriceAdapter(this._stream);
 
   @override
-  Stream<PriceCandidate> get results => _stream;
+  Stream<List<PriceCandidate>> get results => _stream.map((c) => [c]);
 
   @override
   void pause() {}
