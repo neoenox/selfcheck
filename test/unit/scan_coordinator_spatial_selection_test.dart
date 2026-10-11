@@ -132,6 +132,30 @@ void main() {
         expect(coordinator.currentState, ScanState.noProduct);
       },
     );
+
+    test('empty frames never stabilize or save', () async {
+      const jan = '4901234567890';
+      final results = <int>[];
+      coordinator.resultStream.listen(
+        (result) => results.add(result.currentPrice),
+      );
+
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.currentState, ScanState.waitingPrice);
+
+      // Ambiguous OCR frames yield no candidates upstream; even if empty
+      // frames reach the coordinator they must not stabilize or save.
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.addFrame(const []);
+        await _flush();
+      }
+
+      expect(coordinator.currentState, ScanState.waitingPrice);
+      expect(results, isEmpty);
+      expect(await repository.findProductByJan(jan), isNull);
+    });
   });
 }
 
