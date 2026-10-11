@@ -148,4 +148,85 @@ void main() {
     expect(parsePriceText([(text: '本体価格 ￥398', region: region)]), isNull);
     expect(parsePriceText([(text: '税別 398円', region: region)]), isNull);
   });
+
+  test('fails closed for regular and sale prices on one line', () {
+    expect(parsePriceText([(text: '通常 398円 特売 298円', region: region)]), isNull);
+  });
+
+  test('fails closed for member and regular prices on one line', () {
+    expect(parsePriceText([(text: '会員 350円 通常 398円', region: region)]), isNull);
+  });
+
+  test('fails closed for contextual prices split across lines', () {
+    expect(
+      parsePriceText([
+        (text: '通常 398円', region: region),
+        (text: '特売 298円', region: region),
+      ]),
+      isNull,
+    );
+  });
+
+  test('fails closed for SALE marker with multiple prices', () {
+    expect(
+      parsePriceText([(text: 'SALE 298円 通常 398円', region: region)]),
+      isNull,
+    );
+  });
+
+  test('fails closed for member and tax-inclusive prices together', () {
+    expect(
+      parsePriceText([
+        (text: '会員 350円', region: region),
+        (text: '税込 429円', region: region),
+      ]),
+      isNull,
+    );
+  });
+
+  test('selects a single sale price without guessing', () {
+    final result = parsePriceText([(text: '特売 298円', region: region)]);
+
+    expect(result, isNotNull);
+    expect(result!.priceYen, 298);
+  });
+
+  test('selects a single member price without guessing', () {
+    final result = parsePriceText([(text: '会員価格 350円', region: region)]);
+
+    expect(result, isNotNull);
+    expect(result!.priceYen, 350);
+  });
+
+  test('proceeds when contextual prices agree on one value', () {
+    final result = parsePriceText([
+      (text: '特売 298円', region: region),
+      (text: '298円', region: region),
+    ]);
+
+    expect(result, isNotNull);
+    expect(result!.priceYen, 298);
+  });
+
+  test('ambiguous parses stay null across repeated frames', () {
+    for (var i = 0; i < 3; i++) {
+      expect(
+        parsePriceText([(text: '通常 398円 特売 298円', region: region)]),
+        isNull,
+      );
+    }
+  });
+
+  test('tax-inclusive coexistence is not treated as ambiguous', () {
+    const largeRegion = Rect(left: 0, top: 0, right: 120, bottom: 40);
+    const smallRegion = Rect(left: 0, top: 50, right: 70, bottom: 75);
+
+    final result = parsePriceText([
+      (text: '本体価格 398円', region: largeRegion),
+      (text: '税込 429円', region: smallRegion),
+    ]);
+
+    expect(result, isNotNull);
+    expect(result!.priceYen, 429);
+  });
 }

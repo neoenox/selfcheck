@@ -32,6 +32,19 @@ final RegExp _taxInclusiveBeforePattern = RegExp(
 );
 final RegExp _taxExclusiveContextPattern = RegExp(r'(?:税抜(?:き|価格)?|税別|本体価格)');
 
+/// Price-context markers such as regular vs. sale/member prices.
+///
+/// When these markers coexist with two or more distinct price values in one
+/// OCR result, choosing automatically would risk persisting the wrong price
+/// (e.g. the regular price instead of the sale price). Such ambiguous
+/// results fail closed. Tax markers (税込/税抜/本体価格) are intentionally
+/// excluded: tax-inclusive preference already handles those combinations.
+final RegExp _priceContextPattern = RegExp(
+  r'(通常(?:価格)?|定価|特売|特価|セール|SALE|売出し?|会員(?:価格)?'
+  r'|クーポン|まとめ割|割引|お買[いっ]得|奉仕品|大特価|激安)',
+  caseSensitive: false,
+);
+
 /// Parses a plausible retail price from OCR text without guessing values.
 ///
 /// Explicit unit-price segments are removed before candidate ranking so a
@@ -43,8 +56,49 @@ final RegExp _taxExclusiveContextPattern = RegExp(r'(?:税抜(?:き|価格)?|税
 /// accepted only when the whole remaining OCR line is numeric, preventing text
 /// such as "在庫 12" from being treated as a price. Among equally ranked
 /// candidates, the larger OCR region wins.
+///
+/// Ambiguous multi-price results fail closed: when price-context markers
+/// (regular/sale/member, see [_priceContextPattern]) coexist with two or more
+/// distinct price values, no price is returned so a wrong amount can never
+/// stabilize into the persisted history.
 PriceCandidate? parsePriceText(Iterable<({String text, Rect region})> lines) {
+  final candidates = _extractCandidates(lines);
+  if (candidates.isEmpty) return null;
+  if (_isAmbiguousPriceContext(lines, candidates)) return null;
+
   _ParsedPrice? best;
+  for (final candidate in candidates) {
+    if (_isBetterCandidate(candidate, best)) {
+      best = candidate;
+    }
+  }
+
+  if (best == null) return null;
+  return PriceCandidate(
+    priceYen: best.value,
+    confidence: best.confidence,
+    region: best.region,
+    rawTexts: [best.rawText],
+  );
+}
+
+/// Returns true when price-context markers coexist with multiple distinct
+/// values, meaning automatic selection would be a guess.
+bool _isAmbiguousPriceContext(
+  Iterable<({String text, Rect region})> lines,
+  List<_ParsedPrice> candidates,
+) {
+  final distinctValues = candidates.map((c) => c.value).toSet();
+  if (distinctValues.length < 2) return false;
+  return lines.any((line) => _priceContextPattern.hasMatch(line.text));
+}
+
+/// Extracts every price candidate from OCR lines using the same ranking
+/// inputs as [parsePriceText], without ambiguity filtering or best-pick.
+List<_ParsedPrice> _extractCandidates(
+  Iterable<({String text, Rect region})> lines,
+) {
+  final candidates = <_ParsedPrice>[];
 
   for (final line in lines) {
     final candidateText = _withoutExplicitUnitPrices(line.text).trim();
@@ -56,9 +110,7 @@ PriceCandidate? parsePriceText(Iterable<({String text, Rect region})> lines) {
       region: line.region,
     );
     if (taxInclusive != null) {
-      if (_isBetterCandidate(taxInclusive, best)) {
-        best = taxInclusive;
-      }
+      candidates.add(taxInclusive);
       continue;
     }
 
@@ -78,27 +130,19 @@ PriceCandidate? parsePriceText(Iterable<({String text, Rect region})> lines) {
         continue;
       }
 
-      final candidate = _ParsedPrice(
-        value: value,
-        confidence: hasCurrencyMarker ? 0.90 : 0.70,
-        priority: hasCurrencyMarker ? 2 : 1,
-        region: line.region,
-        rawText: line.text,
+      candidates.add(
+        _ParsedPrice(
+          value: value,
+          confidence: hasCurrencyMarker ? 0.90 : 0.70,
+          priority: hasCurrencyMarker ? 2 : 1,
+          region: line.region,
+          rawText: line.text,
+        ),
       );
-
-      if (_isBetterCandidate(candidate, best)) {
-        best = candidate;
-      }
     }
   }
 
-  if (best == null) return null;
-  return PriceCandidate(
-    priceYen: best.value,
-    confidence: best.confidence,
-    region: best.region,
-    rawTexts: [best.rawText],
-  );
+  return candidates;
 }
 
 String _withoutExplicitUnitPrices(String text) {
