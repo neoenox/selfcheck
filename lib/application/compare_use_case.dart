@@ -62,7 +62,10 @@ class CompareUseCase {
     }
 
     if (observations.isEmpty) {
-      return ComparisonResult.firstPrice(currentPriceYen);
+      return ComparisonResult.firstPrice(
+        currentPriceYen,
+        isManualEntry: isManualEntry == true,
+      );
     }
 
     final prices = observations.map((o) => o.priceYen).toList()..sort();
@@ -73,6 +76,7 @@ class CompareUseCase {
         currentPrice: currentPriceYen,
         lastPrice: median,
         observationCount: observations.length,
+        isManualEntry: isManualEntry == true,
       );
     }
 
@@ -87,6 +91,7 @@ class CompareUseCase {
       diffRate: diffRate,
       label: label,
       observationCount: observations.length,
+      isManualEntry: isManualEntry == true,
     );
   }
 

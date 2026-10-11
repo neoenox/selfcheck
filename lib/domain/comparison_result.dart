@@ -8,6 +8,12 @@ class ComparisonResult {
   final int observationCount; // 観測数
   final ComparisonStatus status;
 
+  /// True when the current price was entered manually by the user.
+  /// False for OCR readings and legacy observations recorded before
+  /// manual entry existed. Used by the result screen to show a
+  /// distinguishable marker (issue #89).
+  final bool isManualEntry;
+
   const ComparisonResult({
     required this.currentPrice,
     this.baselineMedianYen,
@@ -16,14 +22,19 @@ class ComparisonResult {
     this.label,
     required this.observationCount,
     required this.status,
+    this.isManualEntry = false,
   });
 
   /// 初回価格（履歴なし）
-  factory ComparisonResult.firstPrice(int currentPrice) {
+  factory ComparisonResult.firstPrice(
+    int currentPrice, {
+    bool isManualEntry = false,
+  }) {
     return ComparisonResult(
       currentPrice: currentPrice,
       observationCount: 0,
       status: ComparisonStatus.firstPrice,
+      isManualEntry: isManualEntry,
     );
   }
 
@@ -32,6 +43,7 @@ class ComparisonResult {
     required int currentPrice,
     required int lastPrice,
     required int observationCount,
+    bool isManualEntry = false,
   }) {
     return ComparisonResult(
       currentPrice: currentPrice,
@@ -43,6 +55,7 @@ class ComparisonResult {
       ),
       observationCount: observationCount,
       status: ComparisonStatus.historyShort,
+      isManualEntry: isManualEntry,
     );
   }
 
@@ -54,6 +67,7 @@ class ComparisonResult {
     required double diffRate,
     required ComparisonLabel label,
     required int observationCount,
+    bool isManualEntry = false,
   }) {
     return ComparisonResult(
       currentPrice: currentPrice,
@@ -63,6 +77,7 @@ class ComparisonResult {
       label: label,
       observationCount: observationCount,
       status: ComparisonStatus.withBaseline,
+      isManualEntry: isManualEntry,
     );
   }
 

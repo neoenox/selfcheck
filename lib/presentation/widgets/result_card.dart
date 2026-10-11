@@ -172,6 +172,38 @@ class ResultCard extends StatelessWidget {
               color: Color(0xFF212121),
             ),
           ),
+          // Manual-entry marker (issue #89): shown only for hand-entered
+          // prices. Teal is intentionally distinct from the SALE (red) /
+          // member (blue) / coupon (orange) / bulk (purple) badge palette
+          // so the markers coexist without visual clash.
+          if (result.isManualEntry) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.teal.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Colors.teal.withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.edit, size: 14, color: Colors.teal.shade700),
+                  const SizedBox(width: 4),
+                  Text(
+                    '手入力',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.teal.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (result.label != null) ...[
             const SizedBox(height: 4),
             Text(
