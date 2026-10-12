@@ -244,6 +244,15 @@ class AppDatabase extends _$AppDatabase {
     bool? isManualEntry,
   }) {
     return transaction(() async {
+      final original = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(oldId))).getSingleOrNull();
+      if (original == null || !original.isValid) {
+        throw StateError('Correction target is missing or already retired');
+      }
+      if (original.productId != productId) {
+        throw StateError('Correction target does not belong to product');
+      }
       await invalidateObservation(oldId);
       return _insertObservation(
         productId: productId,
@@ -255,6 +264,7 @@ class AppDatabase extends _$AppDatabase {
         isCouponPriceVisible: isCouponPriceVisible,
         isBulkDiscount: isBulkDiscount,
         isManualEntry: isManualEntry,
+        strict: true,
       );
     });
   }
@@ -295,6 +305,7 @@ class AppDatabase extends _$AppDatabase {
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
     bool? isManualEntry,
+    bool strict = false,
   }) async {
     final id = 'obs-$productId-${observedAt.microsecondsSinceEpoch}-$priceYen';
     final duplicateKey =
@@ -317,6 +328,19 @@ class AppDatabase extends _$AppDatabase {
     // duplicateKey remains a last-resort same-bucket concurrency guard. The
     // production duplicate decision is the rolling-window query in isDuplicate.
     // Any other constraint failure must not be reported as a successful insert.
+    // Corrections must abort on all uniqueness violations. Otherwise an
+    // insertOrIgnore could return a different row with the same duplicateKey
+    // after retiring the original, silently losing its active history entry.
+    if (strict) {
+      await into(priceObservations).insert(entity);
+      final inserted = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (inserted == null) {
+        throw StateError('Corrected observation was not persisted');
+      }
+      return inserted;
+    }
     await into(
       priceObservations,
     ).insert(entity, mode: InsertMode.insertOrIgnore);
