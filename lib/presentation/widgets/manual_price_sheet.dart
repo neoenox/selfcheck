@@ -252,7 +252,9 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                    onPressed: _saving
+                        ? null
+                        : () => Navigator.of(context).pop(),
                     child: const Text('キャンセル'),
                   ),
                 ),
