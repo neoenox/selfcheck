@@ -44,5 +44,19 @@ abstract class PriceRepository {
   /// same bucket can be stored.
   Future<void> invalidateObservation(String id);
 
+  /// Atomically replace the observation [oldId] with corrected values.
+  /// Either both the retirement and the insert happen, or neither does.
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  });
+
   void dispose();
 }

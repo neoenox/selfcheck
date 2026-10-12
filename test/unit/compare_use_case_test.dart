@@ -421,4 +421,27 @@ class _GatedObservationsRepository implements PriceRepository {
   @override
   Future<void> invalidateObservation(String id) =>
       _delegate.invalidateObservation(id);
+
+  @override
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) => _delegate.replaceObservation(
+    oldId: oldId,
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
+  );
 }
