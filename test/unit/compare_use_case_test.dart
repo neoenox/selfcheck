@@ -233,6 +233,84 @@ void main() {
         expect(result.label, domain.ComparisonLabel.veryCheap);
       });
 
+      test('manual current price marks result and stored row', () async {
+        final product = await repository.createProvisionalProduct(
+          'MANUAL_FLAG',
+        );
+        await insertObservationsSpaced(
+          repository,
+          productId: product.id,
+          prices: [500, 500, 500],
+        );
+
+        final result = await useCase.compare(
+          currentPriceYen: 520,
+          productId: product.id,
+          currentConfidence: 1.0,
+          isManualEntry: true,
+        );
+
+        expect(result.status, domain.ComparisonStatus.withBaseline);
+        expect(result.isManualEntry, isTrue);
+
+        final observations = await repository.getValidObservations(
+          productId: product.id,
+          since: DateTime.now().subtract(const Duration(days: 30)),
+          limit: 10,
+        );
+        expect(
+          observations.where((o) => o.priceYen == 520).single.isManualEntry,
+          isTrue,
+        );
+      });
+
+      test('OCR current price after manual history stays non-manual', () async {
+        final product = await repository.createProvisionalProduct(
+          'OCR_AFTER_MANUAL',
+        );
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 24));
+        for (var i = 0; i < 3; i++) {
+          await repository.insertObservationWithDate(
+            productId: product.id,
+            priceYen: 500,
+            priceConfidence: 1.0,
+            observedAt: baseTime.add(Duration(minutes: i * 6)),
+            isManualEntry: true,
+          );
+        }
+
+        final result = await useCase.compare(
+          currentPriceYen: 500,
+          productId: product.id,
+          currentConfidence: 0.9,
+        );
+
+        expect(result.status, domain.ComparisonStatus.withBaseline);
+        expect(result.isManualEntry, isFalse);
+      });
+
+      test('duplicate skip still reflects current source flag', () async {
+        final product = await repository.createProvisionalProduct(
+          'DUP_MANUAL_FLAG',
+        );
+        await repository.insertObservation(
+          productId: product.id,
+          priceYen: 500,
+          priceConfidence: 0.9,
+        );
+
+        final result = await useCase.compare(
+          currentPriceYen: 500,
+          productId: product.id,
+          currentConfidence: 1.0,
+          isManualEntry: true,
+        );
+
+        // Duplicate readings are not re-saved, but the marker must still
+        // describe the current reading's source.
+        expect(result.isManualEntry, isTrue);
+      });
+
       test(
         'does not insert when the session is cancelled before saving',
         () async {
