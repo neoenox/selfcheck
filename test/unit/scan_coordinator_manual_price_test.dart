@@ -355,6 +355,94 @@ void main() {
       );
     });
   });
+
+  group('manual confidence (B案)', () {
+    late PriceRepository repository;
+    late _ControllableBarcodeAdapter barcodeAdapter;
+    late _ControllablePriceAdapter priceAdapter;
+    late ScanCoordinator coordinator;
+
+    setUp(() async {
+      repository = await createTestRepository();
+      barcodeAdapter = _ControllableBarcodeAdapter();
+      priceAdapter = _ControllablePriceAdapter();
+      coordinator = ScanCoordinator(
+        repository: repository,
+        compareUseCase: CompareUseCase(repository),
+        barcodeAdapter: barcodeAdapter,
+        priceAdapter: priceAdapter,
+      );
+    });
+
+    tearDown(() async {
+      coordinator.dispose();
+      repository.dispose();
+      await barcodeAdapter.close();
+      await priceAdapter.close();
+    });
+
+    test('entry defaults below the OCR range', () {
+      const entry = ManualPriceEntry(priceYen: 350, isTaxInclusive: true);
+
+      expect(entry.confidence, kManualPriceConfidence);
+      expect(kManualPriceConfidence, 0.5);
+      expect(kManualPriceConfidence, lessThan(0.70));
+    });
+
+    test('saved manual value carries 0.5 with the manual flag', () async {
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+
+      final product = await repository.findProductByJan(_barcode.barcode);
+      final observations = await repository.getValidObservations(
+        productId: product!.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.single.priceConfidence, 0.5);
+      expect(observations.single.isManualEntry, isTrue);
+    });
+
+    test('legacy 1.0 manual rows stay valid and comparable', () async {
+      const jan = '4901234567890';
+      final product = await repository.createProvisionalProduct(jan);
+      // Rows written before B案 carry confidence 1.0 with the manual flag.
+      await repository.insertObservation(
+        productId: product.id,
+        priceYen: 400,
+        priceConfidence: 1.0,
+        isManualEntry: true,
+      );
+
+      final result = await CompareUseCase(repository).compare(
+        currentPriceYen: 398,
+        productId: product.id,
+        currentConfidence: 0.9,
+      );
+
+      // No confidence filtering anywhere: the legacy row baselines normally.
+      expect(result.status, domain.ComparisonStatus.historyShort);
+      expect(result.baselineMedianYen, 400);
+
+      // A new B案 row coexists with the legacy one. Note the compared 398
+      // itself is also persisted by compare, as designed.
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+
+      final observations = await repository.getValidObservations(
+        productId: product.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.map((o) => o.priceYen).toSet(), {400, 398, 350});
+    });
+  });
 }
 
 class _ControllableBarcodeAdapter implements BarcodeRecognizerAdapter {
