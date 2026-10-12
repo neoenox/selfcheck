@@ -62,8 +62,7 @@ void main() {
             since: DateTime.now().subtract(const Duration(days: 180)),
             limit: 12,
           );
-          final prices = observations.map((o) => o.priceYen).toList()
-            ..sort();
+          final prices = observations.map((o) => o.priceYen).toList()..sort();
           return prices;
         }
 
