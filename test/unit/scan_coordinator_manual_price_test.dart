@@ -88,8 +88,49 @@ void main() {
         );
         expect(observations, hasLength(1));
         expect(observations.single.priceYen, 350);
+        // Spec (#87/#95): manual entries record at 0.6, BELOW OCR 0.70–0.90.
+        expect(kManualPriceConfidence, 0.6);
         expect(observations.single.priceConfidence, kManualPriceConfidence);
+        expect(observations.single.priceConfidence, lessThan(0.70));
         expect(observations.single.isSaleVisible, isTrue);
+        expect(observations.single.isManualEntry, isTrue);
+      },
+    );
+
+    test(
+      'manual 0.6 still beats OCR 0.90 via source flag, not confidence',
+      () async {
+        final results = <domain.ComparisonResult>[];
+        coordinator.resultStream.listen(results.add);
+
+        // Default manual confidence is the lowered spec value.
+        expect(_manualSale.confidence, kManualPriceConfidence);
+        expect(_manualSale.confidence, lessThan(0.70));
+
+        coordinator.startScan();
+        barcodeAdapter.add(_barcode);
+        await _flush();
+        expect(coordinator.currentState, ScanState.waitingPrice);
+
+        // Queue high-confidence OCR frames, then submit the low-confidence
+        // manual entry: the explicit source flag must win even though
+        // 0.6 < 0.90 (_price carries 0.9).
+        priceAdapter.addFrame([_price(398)]);
+        expect(coordinator.submitManualPrice(_manualSale), isTrue);
+        await _flush(100);
+
+        expect(coordinator.currentState, ScanState.result);
+        expect(results.single.currentPrice, 350);
+        expect(results.single.isManualEntry, isTrue);
+
+        final product = await repository.findProductByJan(_barcode.barcode);
+        final observations = await repository.getValidObservations(
+          productId: product!.id,
+          since: DateTime.now().subtract(const Duration(minutes: 1)),
+          limit: 10,
+        );
+        expect(observations.single.priceYen, 350);
+        expect(observations.single.priceConfidence, 0.6);
         expect(observations.single.isManualEntry, isTrue);
       },
     );

@@ -138,22 +138,29 @@ class ResultCard extends StatelessWidget {
               ),
             ),
           ),
-          if (janCode != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                janCode!,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey.shade600,
-                  fontFamily: 'monospace',
+          if (janCode != null) ...[
+            const SizedBox(width: 8),
+            Flexible(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  janCode!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                    fontFamily: 'monospace',
+                  ),
                 ),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -164,14 +171,49 @@ class ResultCard extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
-          Text(
-            '¥${result.currentPrice}',
-            style: const TextStyle(
-              fontSize: 36,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF212121),
+          // FittedBox scales the price down instead of overflowing on
+          // narrow screens / enlarged text; no effect at normal sizes.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              '¥${result.currentPrice}',
+              style: const TextStyle(
+                fontSize: 36,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF212121),
+              ),
             ),
           ),
+          // Manual-entry marker (issue #89): shown only for hand-entered
+          // prices. Teal is intentionally distinct from the SALE (red) /
+          // member (blue) / coupon (orange) / bulk (purple) badge palette
+          // so the markers coexist without visual clash.
+          if (result.isManualEntry) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.teal.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.teal.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.edit, size: 14, color: Colors.teal.shade700),
+                  const SizedBox(width: 4),
+                  Text(
+                    '手入力',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.teal.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (result.label != null) ...[
             const SizedBox(height: 4),
             Text(
@@ -199,14 +241,18 @@ class ResultCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(color: Colors.grey.shade50),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      // Wrap instead of Row so baseline + diff flow onto two lines on
+      // narrow screens / enlarged text instead of overflowing.
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 16,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Text(
             '自分値: ¥${result.baselineMedianYen}',
             style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
           ),
-          const SizedBox(width: 16),
           Text(
             '$diffText $rateText',
             style: TextStyle(
@@ -223,19 +269,31 @@ class ResultCard extends StatelessWidget {
   Widget _buildFooter(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Row(
+      // Wrap so the buttons flow below the count on narrow screens /
+      // enlarged text instead of overflowing. At normal sizes this lays
+      // out identically to the previous Row (count left, buttons right).
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
         children: [
           Text(
             '${result.observationCount}件の履歴',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
           ),
-          const Spacer(),
-          TextButton(onPressed: onDismiss, child: const Text('閉じる')),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: onScanAgain,
-            icon: const Icon(Icons.qr_code_scanner, size: 18),
-            label: const Text('スキャン'),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TextButton(onPressed: onDismiss, child: const Text('閉じる')),
+              FilledButton.icon(
+                onPressed: onScanAgain,
+                icon: const Icon(Icons.qr_code_scanner, size: 18),
+                label: const Text('スキャン'),
+              ),
+            ],
           ),
         ],
       ),
