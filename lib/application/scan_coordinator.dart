@@ -527,12 +527,14 @@ abstract class PriceOcrAdapter {
   void resume();
 }
 
-/// Confidence recorded for user-confirmed manual prices.
+/// Confidence recorded for user-entered manual prices.
 ///
-/// OCR candidates carry estimator confidences (0.70–0.90); a manual entry was
-/// verified by a human, so it is recorded at full confidence alongside
+/// Deliberately below the OCR estimator range (0.70–0.90) per #87: a manual
+/// value must never outrank machine readings on confidence. Manual priority
+/// over OCR candidates comes from the user-confirmed entry path itself, not
+/// from this value. Origin (manual vs OCR) is recorded separately in
 /// [ManualPriceEntry.isManualEntry].
-const double kManualPriceConfidence = 1.0;
+const double kManualPriceConfidence = 0.5;
 
 /// A user-entered price awaiting comparison.
 ///

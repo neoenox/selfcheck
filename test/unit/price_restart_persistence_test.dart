@@ -62,7 +62,8 @@ void main() {
       await firstSession.insertObservation(
         productId: product.id,
         priceYen: 350,
-        priceConfidence: 1.0,
+        // B案 manual confidence (below the OCR range).
+        priceConfidence: 0.5,
         isSaleVisible: true,
         isManualEntry: true,
       );
@@ -78,6 +79,7 @@ void main() {
       );
       expect(observations, hasLength(1));
       expect(observations.single.priceYen, 350);
+      expect(observations.single.priceConfidence, 0.5);
       expect(observations.single.isSaleVisible, isTrue);
       expect(observations.single.isManualEntry, isTrue);
       expect(observations.single.isMemberPriceVisible, isNull);
