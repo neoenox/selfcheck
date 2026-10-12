@@ -196,6 +196,81 @@ void main() {
       expect(find.text('¥350'), findsOneWidget);
     });
 
+    testWidgets('async correction disables a second save', (tester) async {
+      final pending = Completer<bool>();
+      var calls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showManualPriceSheet(
+                  context,
+                  controller,
+                  initialPriceYen: 398,
+                  onSaveEntry: (_) {
+                    calls++;
+                    return pending.future;
+                  },
+                ),
+                child: const Text('訂正を開く'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('訂正を開く'));
+      await tester.pumpAndSettle();
+
+      final saveButton = find.widgetWithText(FilledButton, '保存する');
+      await tester.tap(saveButton);
+      await tester.pump();
+      expect(calls, 1);
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNull);
+      await tester.tap(saveButton);
+      await tester.pump();
+      expect(calls, 1);
+
+      pending.complete(true);
+      await tester.pumpAndSettle();
+      expect(find.text('訂正を開く'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('dismissed correction ignores late failed callback', (
+      tester,
+    ) async {
+      final pending = Completer<bool>();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showManualPriceSheet(
+                  context,
+                  controller,
+                  initialPriceYen: 398,
+                  onSaveEntry: (_) => pending.future,
+                ),
+                child: const Text('訂正を開く'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('訂正を開く'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('保存する'));
+      await tester.pump();
+
+      // Sheet may be dismissed by the route while the write is pending.
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+      pending.complete(false);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    });
+
     test('correctLatestPrice without JAN returns false', () async {
       expect(
         await controller.correctLatestPrice(
