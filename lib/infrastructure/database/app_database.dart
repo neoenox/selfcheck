@@ -284,6 +284,7 @@ class AppDatabase extends _$AppDatabase {
         isCouponPriceVisible: isCouponPriceVisible,
         isBulkDiscount: isBulkDiscount,
         isManualEntry: isManualEntry,
+        strict: true,
       );
     });
   }
@@ -324,6 +325,7 @@ class AppDatabase extends _$AppDatabase {
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
     bool? isManualEntry,
+    bool strict = false,
   }) async {
     final id = 'obs-$productId-${observedAt.microsecondsSinceEpoch}-$priceYen';
     final duplicateKey =
@@ -346,6 +348,25 @@ class AppDatabase extends _$AppDatabase {
     // duplicateKey remains a last-resort same-bucket concurrency guard. The
     // production duplicate decision is the rolling-window query in isDuplicate.
     // Any other constraint failure must not be reported as a successful insert.
+    // Correction (strict:true, issue #90) uses abort-on-conflict plus a
+    // primary-key lookup: looking a correction up by bucketed duplicateKey
+    // could silently return a different valid row sharing the same bucket,
+    // committing with the original already invalidated. Any conflict must
+    // throw so the surrounding correction transaction rolls back. Normal
+    // inserts keep the tolerant insertOrIgnore behaviour relied on by
+    // CompareUseCase duplicate flows.
+    if (strict) {
+      await into(priceObservations).insert(entity);
+
+      final persisted = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (persisted == null) {
+        throw StateError('Price observation insert was not persisted');
+      }
+      return persisted;
+    }
+
     await into(
       priceObservations,
     ).insert(entity, mode: InsertMode.insertOrIgnore);
