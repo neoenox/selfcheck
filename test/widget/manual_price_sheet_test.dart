@@ -9,6 +9,7 @@ import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
 import 'package:selfcheck_jibun_check/presentation/scan_screen.dart';
 import 'package:selfcheck_jibun_check/presentation/scan_screen_controller.dart';
+import 'package:selfcheck_jibun_check/presentation/widgets/manual_price_sheet.dart';
 
 const _barcodeRegion = Rect(left: 0, top: 0, right: 100, bottom: 50);
 const _nearPriceRegion = Rect(left: 0, top: 50, right: 100, bottom: 100);
