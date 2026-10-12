@@ -526,72 +526,72 @@ void main() {
     test(
       'correction cannot retire a row belonging to another product',
       () async {
-      await saveOcrPrice(398);
-      final source = await repository.findProductByJan(_barcode.barcode);
-      final original = (await repository.getValidObservations(
-        productId: source!.id,
-        since: DateTime.fromMillisecondsSinceEpoch(0),
-        limit: 10,
-      )).single;
-      final other = await repository.createProvisionalProduct(
-        '4902222222222',
-      );
-
-      await expectLater(
-        repository.replaceObservation(
-          oldId: original.id,
-          productId: other.id,
-          priceYen: 350,
-          priceConfidence: 0.6,
-        ),
-        throwsStateError,
-      );
-      expect(await validPrices(), [398]);
-      expect(
-        await repository.getValidObservations(
-          productId: other.id,
+        await saveOcrPrice(398);
+        final source = await repository.findProductByJan(_barcode.barcode);
+        final original = (await repository.getValidObservations(
+          productId: source!.id,
           since: DateTime.fromMillisecondsSinceEpoch(0),
           limit: 10,
-        ),
-        isEmpty,
-      );
+        )).single;
+        final other = await repository.createProvisionalProduct(
+          '4902222222222',
+        );
+
+        await expectLater(
+          repository.replaceObservation(
+            oldId: original.id,
+            productId: other.id,
+            priceYen: 350,
+            priceConfidence: 0.6,
+          ),
+          throwsStateError,
+        );
+        expect(await validPrices(), [398]);
+        expect(
+          await repository.getValidObservations(
+            productId: other.id,
+            since: DateTime.fromMillisecondsSinceEpoch(0),
+            limit: 10,
+          ),
+          isEmpty,
+        );
       },
     );
 
     test(
       'duplicate corrected price rolls back retirement of original',
       () async {
-      await saveOcrPrice(398);
-      final product = await repository.findProductByJan(_barcode.barcode);
-      final original = (await repository.getValidObservations(
-        productId: product!.id,
-        since: DateTime.fromMillisecondsSinceEpoch(0),
-        limit: 10,
-      )).single;
-      await repository.insertObservation(
-        productId: product.id,
-        priceYen: 350,
-        priceConfidence: 0.9,
-      );
-
-      // Existing valid price already owns the 350-yen duplicate slot.
-      // A correction must fail, not retire 398 and return the 350 row.
-      await expectLater(
-        repository.replaceObservation(
-          oldId: original.id,
+        await saveOcrPrice(398);
+        final product = await repository.findProductByJan(_barcode.barcode);
+        final original = (await repository.getValidObservations(
+          productId: product!.id,
+          since: DateTime.fromMillisecondsSinceEpoch(0),
+          limit: 10,
+        )).single;
+        await repository.insertObservation(
           productId: product.id,
           priceYen: 350,
-          priceConfidence: 0.6,
-        ),
-        throwsA(anything),
-      );
-      final after = await repository.getValidObservations(
-        productId: product.id,
-        since: DateTime.fromMillisecondsSinceEpoch(0),
-        limit: 10,
-      );
-      expect(after.map((o) => o.priceYen).toSet(), {398, 350});
-      expect(after.singleWhere((o) => o.id == original.id).isValid, isTrue);
+          priceConfidence: 0.9,
+        );
+
+        // Existing valid price already owns the 350-yen duplicate slot.
+        // A correction must fail, not retire 398 and return the 350 row.
+        await expectLater(
+          repository.replaceObservation(
+            oldId: original.id,
+            productId: product.id,
+            priceYen: 350,
+            priceConfidence: 0.6,
+          ),
+          throwsA(anything),
+        );
+        final after = await repository.getValidObservations(
+          productId: product.id,
+          since: DateTime.fromMillisecondsSinceEpoch(0),
+          limit: 10,
+        );
+        expect(after.map((o) => o.priceYen).toSet(), {398, 350});
+        expect(after.singleWhere((o) => o.id == original.id).isValid, isTrue);
       },
     );
 
