@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:selfcheck_jibun_check/application/compare_use_case.dart';
+import 'package:selfcheck_jibun_check/application/scan_coordinator.dart';
 import 'package:selfcheck_jibun_check/domain/comparison_result.dart' as domain;
 import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
@@ -243,10 +244,14 @@ void main() {
           prices: [500, 500, 500],
         );
 
+        // Spec (#87/#95): manual entries are recorded at 0.6, BELOW the OCR
+        // range 0.70–0.90. The marker must follow the source flag, not the
+        // confidence magnitude.
+        expect(kManualPriceConfidence, 0.6);
         final result = await useCase.compare(
           currentPriceYen: 520,
           productId: product.id,
-          currentConfidence: 1.0,
+          currentConfidence: kManualPriceConfidence,
           isManualEntry: true,
         );
 
@@ -258,10 +263,10 @@ void main() {
           since: DateTime.now().subtract(const Duration(days: 30)),
           limit: 10,
         );
-        expect(
-          observations.where((o) => o.priceYen == 520).single.isManualEntry,
-          isTrue,
-        );
+        final saved = observations.where((o) => o.priceYen == 520).single;
+        expect(saved.isManualEntry, isTrue);
+        expect(saved.priceConfidence, kManualPriceConfidence);
+        expect(saved.priceConfidence, lessThan(0.70));
       });
 
       test('OCR current price after manual history stays non-manual', () async {
@@ -273,7 +278,7 @@ void main() {
           await repository.insertObservationWithDate(
             productId: product.id,
             priceYen: 500,
-            priceConfidence: 1.0,
+            priceConfidence: kManualPriceConfidence,
             observedAt: baseTime.add(Duration(minutes: i * 6)),
             isManualEntry: true,
           );
@@ -302,7 +307,7 @@ void main() {
         final result = await useCase.compare(
           currentPriceYen: 500,
           productId: product.id,
-          currentConfidence: 1.0,
+          currentConfidence: kManualPriceConfidence,
           isManualEntry: true,
         );
 
@@ -310,6 +315,53 @@ void main() {
         // describe the current reading's source.
         expect(result.isManualEntry, isTrue);
       });
+
+      test(
+        'confidence magnitude never decides the manual marker (independence)',
+        () async {
+          // Manual 0.6 must still mark, while OCR 0.90 must not — priority
+          // comes from the isManualEntry source flag, never from comparing
+          // confidence values.
+          final product = await repository.createProvisionalProduct(
+            'CONFIDENCE_INDEPENDENCE',
+          );
+          await insertObservationsSpaced(
+            repository,
+            productId: product.id,
+            prices: [500, 500, 500],
+          );
+
+          final manualLow = await useCase.compare(
+            currentPriceYen: 521,
+            productId: product.id,
+            currentConfidence: 0.6,
+            isManualEntry: true,
+          );
+          expect(manualLow.isManualEntry, isTrue);
+
+          final ocrHigh = await useCase.compare(
+            currentPriceYen: 522,
+            productId: product.id,
+            currentConfidence: 0.90,
+          );
+          expect(ocrHigh.isManualEntry, isFalse);
+
+          // The stored rows keep the submitted confidences verbatim, while
+          // the flag stays orthogonal to the magnitude.
+          final observations = await repository.getValidObservations(
+            productId: product.id,
+            since: DateTime.now().subtract(const Duration(days: 30)),
+            limit: 10,
+          );
+          final manualRow = observations.where((o) => o.priceYen == 521).single;
+          final ocrRow = observations.where((o) => o.priceYen == 522).single;
+          expect(manualRow.priceConfidence, 0.6);
+          expect(manualRow.priceConfidence, lessThan(ocrRow.priceConfidence));
+          expect(manualRow.isManualEntry, isTrue);
+          expect(ocrRow.priceConfidence, 0.90);
+          expect(ocrRow.isManualEntry, isNot(true));
+        },
+      );
 
       test(
         'does not insert when the session is cancelled before saving',
