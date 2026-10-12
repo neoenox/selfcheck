@@ -5,6 +5,7 @@ import 'package:selfcheck_jibun_check/application/compare_use_case.dart';
 import 'package:selfcheck_jibun_check/application/scan_coordinator.dart';
 import 'package:selfcheck_jibun_check/domain/comparison_result.dart' as domain;
 import 'package:selfcheck_jibun_check/domain/scan_state.dart';
+import 'package:selfcheck_jibun_check/infrastructure/database/app_database.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
 
@@ -480,6 +481,72 @@ void main() {
         isFalse,
       );
     });
+
+    test('failed correction keeps the previous observation', () async {
+      await saveOcrPrice(398);
+      expect(await validPrices(), [398]);
+
+      // The wrapper sees the real product and history but fails the
+      // atomic replacement itself.
+      final failing = _FailingReplaceRepository(repository);
+      final failingCoordinator = ScanCoordinator(
+        repository: failing,
+        compareUseCase: CompareUseCase(failing),
+        barcodeAdapter: _ControllableBarcodeAdapter(),
+        priceAdapter: _ControllablePriceAdapter(),
+      );
+      addTearDown(failingCoordinator.dispose);
+
+      final ok = await failingCoordinator.correctLatestObservation(
+        jan: _barcode.barcode,
+        entry: _manualSale,
+      );
+
+      expect(ok, isFalse);
+      expect(await validPrices(), [398]);
+    });
+
+    test('correction never touches another product', () async {
+      const otherJan = '4901111111111';
+      const otherBarcode = BarcodeCandidate(
+        barcode: otherJan,
+        format: BarcodeFormat.ean13,
+        confidence: 0.95,
+        region: _barcodeRegion,
+      );
+
+      await saveOcrPrice(398);
+
+      coordinator.resetToIdle();
+      coordinator.startScan();
+      barcodeAdapter.add(otherBarcode);
+      await _flush();
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.addFrame([_price(450)]);
+        await _flush();
+      }
+      await _flush(100);
+      expect(coordinator.currentState, ScanState.result);
+
+      final ok = await coordinator.correctLatestObservation(
+        jan: _barcode.barcode,
+        entry: _manualSale,
+      );
+      expect(ok, isTrue);
+
+      Future<List<int>> pricesFor(String jan) async {
+        final product = await repository.findProductByJan(jan);
+        final observations = await repository.getValidObservations(
+          productId: product!.id,
+          since: DateTime.now().subtract(const Duration(minutes: 1)),
+          limit: 10,
+        );
+        return [for (final o in observations) o.priceYen];
+      }
+
+      expect(await pricesFor(_barcode.barcode), [350]);
+      expect(await pricesFor(otherJan), [450]);
+    });
   });
 }
 
@@ -513,4 +580,107 @@ class _ControllablePriceAdapter implements PriceOcrAdapter {
 
   @override
   void resume() {}
+}
+
+/// Repository failing only the atomic replacement, to prove a failed
+/// correction cannot lose the previous observation.
+class _FailingReplaceRepository implements PriceRepository {
+  final PriceRepository _inner;
+  _FailingReplaceRepository(this._inner);
+
+  @override
+  Future<ProductIdentity?> findProductByJan(String jan) =>
+      _inner.findProductByJan(jan);
+
+  @override
+  Future<ProductIdentity> createProvisionalProduct(String jan) =>
+      _inner.createProvisionalProduct(jan);
+
+  @override
+  Future<List<PriceObservation>> getValidObservations({
+    required String productId,
+    required DateTime since,
+    required int limit,
+  }) => _inner.getValidObservations(
+    productId: productId,
+    since: since,
+    limit: limit,
+  );
+
+  @override
+  Future<PriceObservation> insertObservation({
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) => _inner.insertObservation(
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
+  );
+
+  @override
+  Future<bool> isDuplicate({
+    required String productId,
+    required int priceYen,
+    required DateTime observedAt,
+  }) => _inner.isDuplicate(
+    productId: productId,
+    priceYen: priceYen,
+    observedAt: observedAt,
+  );
+
+  @override
+  Future<PriceObservation> insertObservationWithDate({
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    required DateTime observedAt,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) => _inner.insertObservationWithDate(
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    observedAt: observedAt,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
+  );
+
+  @override
+  Future<void> invalidateObservation(String id) =>
+      _inner.invalidateObservation(id);
+
+  @override
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) async {
+    throw Exception('simulated replace failure');
+  }
+
+  @override
+  void dispose() => _inner.dispose();
 }

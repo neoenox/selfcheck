@@ -374,6 +374,21 @@ class _BrokenRepository implements PriceRepository {
 
   @override
   Future<void> invalidateObservation(String id) async {}
+
+  @override
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) async {
+    throw Exception('replaceObservation not supported in broken repo');
+  }
 }
 
 /// Stream-based adapter (for manual control in tests)

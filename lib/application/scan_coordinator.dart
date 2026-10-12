@@ -135,11 +135,10 @@ class ScanCoordinator {
   /// Corrects the latest saved observation for [jan] with user-entered values.
   ///
   /// Only available once a scan settled (result) or is idle: it must never
-  /// interfere with an active recognition session. The previous latest
-  /// observation is invalidated (kept for audit) before the corrected value
-  /// is compared and saved, so the duplicate window cannot block the fix
-  /// and the wrong amount leaves the baseline. Returns false when there is
-  /// nothing to correct or the entry is invalid.
+  /// interfere with an active recognition session. Retirement and re-insert
+  /// happen atomically inside the repository, so a failed correction can
+  /// never lose price history. Returns false when there is nothing to
+  /// correct or the entry is invalid.
   Future<bool> correctLatestObservation({
     required String jan,
     required ManualPriceEntry entry,
@@ -158,30 +157,65 @@ class ScanCoordinator {
     );
     if (observations.isEmpty) return false;
 
-    await _repository.invalidateObservation(observations.first.id);
-
     final generation = _sessionGeneration;
-    await _compare(
-      BarcodeCandidate(
-        barcode: jan,
-        format: jan.length == 13
-            ? BarcodeFormat.ean13
-            : jan.length == 8
-            ? BarcodeFormat.ean8
-            : BarcodeFormat.unknown,
-        confidence: entry.confidence,
-        region: const Rect(left: 0, top: 0, right: 0, bottom: 0),
-      ),
-      entry.priceYen,
-      entry.confidence,
-      generation,
-      isSaleVisible: entry.isSaleVisible,
-      isMemberPriceVisible: entry.isMemberPriceVisible,
-      isCouponPriceVisible: entry.isCouponPriceVisible,
-      isBulkDiscount: entry.isBulkDiscount,
-      isManualEntry: true,
-    );
-    return _isCurrentSession(generation) && _state == ScanState.result;
+    try {
+      await _repository.replaceObservation(
+        oldId: observations.first.id,
+        productId: product.id,
+        priceYen: entry.priceYen,
+        priceConfidence: entry.confidence,
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+        isManualEntry: true,
+      );
+    } on Object {
+      // The transaction rolled back: the previous observation is intact.
+      return false;
+    }
+    if (!_isCurrentSession(generation)) return false;
+
+    _state = ScanState.comparing;
+    _stateController.add(_state);
+
+    try {
+      // The corrected row is already persisted; only recompute the result.
+      final result = await _compareUseCase.compare(
+        currentPriceYen: entry.priceYen,
+        productId: product.id,
+        currentConfidence: entry.confidence,
+        skipInsert: true,
+        isSessionValid: () => _isCurrentSession(generation),
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+        isManualEntry: true,
+      );
+      if (!_isCurrentSession(generation)) return false;
+
+      _resultJanCode = jan;
+      _resultController.add(result);
+      _cancelSubscriptions();
+      _resetRecognitionContext();
+      _clearWarning();
+      _barcodeAdapter.pause();
+      _priceAdapter.pause();
+      _state = ScanState.result;
+      _stateController.add(_state);
+      return true;
+    } on Exception catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+      return false;
+    } on Error catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+      return false;
+    }
   }
 
   void cancelScan() {

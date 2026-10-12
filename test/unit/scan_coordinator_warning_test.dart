@@ -331,4 +331,27 @@ class _DelayedRepository implements PriceRepository {
   @override
   Future<void> invalidateObservation(String id) =>
       _inner.invalidateObservation(id);
+
+  @override
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) => _inner.replaceObservation(
+    oldId: oldId,
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
+  );
 }

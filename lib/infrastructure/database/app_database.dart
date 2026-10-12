@@ -213,7 +213,6 @@ class AppDatabase extends _$AppDatabase {
       priceObservations,
     )..where((t) => t.id.equals(id))).getSingleOrNull();
     if (observation == null || !observation.isValid) return;
-
     // Retain the invalid row for audit/history while freeing the active unique
     // duplicate slot so a corrected observation can be stored in the same
     // five-minute bucket. Including the immutable row id keeps this idempotent
@@ -226,6 +225,38 @@ class AppDatabase extends _$AppDatabase {
         duplicateKey: Value(retiredDuplicateKey),
       ),
     );
+  }
+
+  /// Atomically replace an observation with corrected values.
+  ///
+  /// Invalidation and re-insertion run in one transaction: if the insert
+  /// fails, the original row is untouched, so a failed correction can never
+  /// lose price history.
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) {
+    return transaction(() async {
+      await invalidateObservation(oldId);
+      return _insertObservation(
+        productId: productId,
+        priceYen: priceYen,
+        priceConfidence: priceConfidence,
+        observedAt: DateTime.now(),
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+        isManualEntry: isManualEntry,
+      );
+    });
   }
 
   /// Insert an observation with a specific observedAt date (for testing).
