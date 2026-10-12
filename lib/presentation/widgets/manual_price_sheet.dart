@@ -73,6 +73,7 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
   _PriceKind _kind = _PriceKind.regular;
   bool _isTaxInclusive = true;
   String? _submitError;
+  bool _saving = false;
 
   @override
   void dispose() {
@@ -87,11 +88,15 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
     return value != null && value >= 1 && value <= 99999;
   }
 
-  bool get _canSave => _priceValid && _isTaxInclusive;
+  bool get _canSave => !_saving && _priceValid && _isTaxInclusive;
 
   void _save() async {
     final value = _parsedPrice;
     if (value == null || !_canSave) return;
+    setState(() {
+      _saving = true;
+      _submitError = null;
+    });
 
     final entry = ManualPriceEntry(
       priceYen: value,
@@ -101,24 +106,32 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
       isCouponPriceVisible: _kind == _PriceKind.coupon ? true : null,
       isBulkDiscount: _kind == _PriceKind.bulk ? true : null,
     );
-    final save = widget.onSaveEntry;
-    final ok = save != null
-        ? await save(entry)
-        : widget.controller.submitManualPrice(
-            priceYen: entry.priceYen,
-            isTaxInclusive: entry.isTaxInclusive,
-            isSaleVisible: entry.isSaleVisible,
-            isMemberPriceVisible: entry.isMemberPriceVisible,
-            isCouponPriceVisible: entry.isCouponPriceVisible,
-            isBulkDiscount: entry.isBulkDiscount,
-          );
+    bool ok;
+    try {
+      final save = widget.onSaveEntry;
+      ok = save != null
+          ? await save(entry)
+          : widget.controller.submitManualPrice(
+              priceYen: entry.priceYen,
+              isTaxInclusive: entry.isTaxInclusive,
+              isSaleVisible: entry.isSaleVisible,
+              isMemberPriceVisible: entry.isMemberPriceVisible,
+              isCouponPriceVisible: entry.isCouponPriceVisible,
+              isBulkDiscount: entry.isBulkDiscount,
+            );
+    } catch (_) {
+      ok = false;
+    }
+    // The user may dismiss the sheet while a correction is being persisted.
+    // Never call setState or Navigator after its State has been disposed.
+    if (!mounted) return;
     if (!ok) {
       setState(() {
+        _saving = false;
         _submitError = '保存できませんでした。スキャン状態を確認してください。';
       });
       return;
     }
-    if (!mounted) return;
     Navigator.of(context).pop(
       ManualSaveOutcome(
         saved: true,
@@ -239,7 +252,7 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: _saving ? null : () => Navigator.of(context).pop(),
                     child: const Text('キャンセル'),
                   ),
                 ),
