@@ -228,6 +228,67 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  Future<PriceObservation?> findObservationById(String id) async {
+    return (select(
+      priceObservations,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+  }
+
+  /// Correct an already-saved observation (issue #90).
+  ///
+  /// Invalidates the original row (kept for audit, never hard-deleted) and
+  /// inserts the corrected amount+type as a new valid row. The retired
+  /// duplicate slot is freed by [invalidateObservation] so the correction can
+  /// reuse the same five-minute bucket. Throws [StateError] when the target
+  /// is missing or already invalid.
+  Future<PriceObservation> correctObservation({
+    required String observationId,
+    required int correctedPriceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+    DateTime? correctedAt,
+  }) async {
+    return transaction(() async {
+      final original = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(observationId))).getSingleOrNull();
+      if (original == null) {
+        throw StateError('Price observation not found: $observationId');
+      }
+      if (!original.isValid) {
+        throw StateError('Price observation already invalid: $observationId');
+      }
+
+      await invalidateObservation(observationId);
+
+      var observedAt = correctedAt ?? DateTime.now();
+      // Guard the derived row id against colliding with the retained
+      // original when the same price is re-saved at the same instant.
+      if (correctedPriceYen == original.priceYen &&
+          observedAt.microsecondsSinceEpoch ==
+              original.observedAt.microsecondsSinceEpoch) {
+        observedAt = observedAt.add(const Duration(microseconds: 1));
+      }
+
+      return _insertObservation(
+        productId: original.productId,
+        priceYen: correctedPriceYen,
+        priceConfidence: priceConfidence,
+        observedAt: observedAt,
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+        isManualEntry: isManualEntry,
+        strict: true,
+      );
+    });
+  }
+
   /// Insert an observation with a specific observedAt date (for testing).
   /// Allows creating observations in the past to test time-window filtering.
   Future<PriceObservation> insertObservationWithDate({
@@ -264,6 +325,7 @@ class AppDatabase extends _$AppDatabase {
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
     bool? isManualEntry,
+    bool strict = false,
   }) async {
     final id = 'obs-$productId-${observedAt.microsecondsSinceEpoch}-$priceYen';
     final duplicateKey =
@@ -286,6 +348,25 @@ class AppDatabase extends _$AppDatabase {
     // duplicateKey remains a last-resort same-bucket concurrency guard. The
     // production duplicate decision is the rolling-window query in isDuplicate.
     // Any other constraint failure must not be reported as a successful insert.
+    // Correction (strict:true, issue #90) uses abort-on-conflict plus a
+    // primary-key lookup: looking a correction up by bucketed duplicateKey
+    // could silently return a different valid row sharing the same bucket,
+    // committing with the original already invalidated. Any conflict must
+    // throw so the surrounding correction transaction rolls back. Normal
+    // inserts keep the tolerant insertOrIgnore behaviour relied on by
+    // CompareUseCase duplicate flows.
+    if (strict) {
+      await into(priceObservations).insert(entity);
+
+      final persisted = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (persisted == null) {
+        throw StateError('Price observation insert was not persisted');
+      }
+      return persisted;
+    }
+
     await into(
       priceObservations,
     ).insert(entity, mode: InsertMode.insertOrIgnore);

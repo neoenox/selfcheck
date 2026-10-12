@@ -273,5 +273,32 @@ class _BrokenRepository implements PriceRepository {
   }
 
   @override
+  Future<PriceObservation?> findObservationById(String id) =>
+      _inner.findObservationById(id);
+
+  @override
+  Future<PriceObservation> correctObservation({
+    required String observationId,
+    required int correctedPriceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+    DateTime? correctedAt,
+  }) => _inner.correctObservation(
+    observationId: observationId,
+    correctedPriceYen: correctedPriceYen,
+    priceConfidence: priceConfidence,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
+    correctedAt: correctedAt,
+  );
+
+  @override
   void dispose() => _inner.dispose();
 }

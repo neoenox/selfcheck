@@ -25,6 +25,22 @@ abstract class PriceRepository {
     required DateTime observedAt,
   });
 
+  Future<PriceObservation?> findObservationById(String id);
+
+  /// Correct an already-saved observation: invalidate the old row (kept for
+  /// audit) and save the corrected amount+type as a new valid row.
+  Future<PriceObservation> correctObservation({
+    required String observationId,
+    required int correctedPriceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+    DateTime? correctedAt,
+  });
+
   /// Insert an observation with a specific observedAt date.
   /// Use for testing time-window filtering with past dates.
   Future<PriceObservation> insertObservationWithDate({
