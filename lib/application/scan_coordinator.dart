@@ -132,6 +132,92 @@ class ScanCoordinator {
     );
   }
 
+  /// Corrects the latest saved observation for [jan] with user-entered values.
+  ///
+  /// Only available once a scan settled (result) or is idle: it must never
+  /// interfere with an active recognition session. Retirement and re-insert
+  /// happen atomically inside the repository, so a failed correction can
+  /// never lose price history. Returns false when there is nothing to
+  /// correct or the entry is invalid.
+  Future<bool> correctLatestObservation({
+    required String jan,
+    required ManualPriceEntry entry,
+  }) async {
+    if (_state != ScanState.result && _state != ScanState.idle) return false;
+    if (entry.priceYen < 1 || entry.priceYen > 99999 || !entry.isTaxInclusive) {
+      return false;
+    }
+
+    final product = await _repository.findProductByJan(jan);
+    if (product == null) return false;
+    final observations = await _repository.getValidObservations(
+      productId: product.id,
+      since: DateTime.fromMillisecondsSinceEpoch(0),
+      limit: 1,
+    );
+    if (observations.isEmpty) return false;
+
+    final generation = _sessionGeneration;
+    try {
+      await _repository.replaceObservation(
+        oldId: observations.first.id,
+        productId: product.id,
+        priceYen: entry.priceYen,
+        priceConfidence: entry.confidence,
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+        isManualEntry: true,
+      );
+    } on Object {
+      // The transaction rolled back: the previous observation is intact.
+      return false;
+    }
+    if (!_isCurrentSession(generation)) return false;
+
+    _state = ScanState.comparing;
+    _stateController.add(_state);
+
+    try {
+      // The corrected row is already persisted; only recompute the result.
+      final result = await _compareUseCase.compare(
+        currentPriceYen: entry.priceYen,
+        productId: product.id,
+        currentConfidence: entry.confidence,
+        skipInsert: true,
+        isSessionValid: () => _isCurrentSession(generation),
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+        isManualEntry: true,
+      );
+      if (!_isCurrentSession(generation)) return false;
+
+      _resultJanCode = jan;
+      _resultController.add(result);
+      _cancelSubscriptions();
+      _resetRecognitionContext();
+      _clearWarning();
+      _barcodeAdapter.pause();
+      _priceAdapter.pause();
+      _state = ScanState.result;
+      _stateController.add(_state);
+      return true;
+    } on Exception catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+      return false;
+    } on Error catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+      return false;
+    }
+  }
+
   void cancelScan() {
     _transitionToIdle();
   }

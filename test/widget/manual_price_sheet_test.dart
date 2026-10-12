@@ -9,8 +9,10 @@ import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
 import 'package:selfcheck_jibun_check/presentation/scan_screen.dart';
 import 'package:selfcheck_jibun_check/presentation/scan_screen_controller.dart';
+import 'package:selfcheck_jibun_check/presentation/widgets/manual_price_sheet.dart';
 
 const _barcodeRegion = Rect(left: 0, top: 0, right: 100, bottom: 50);
+const _nearPriceRegion = Rect(left: 0, top: 50, right: 100, bottom: 100);
 
 const _barcode = BarcodeCandidate(
   barcode: '4901234567890',
@@ -148,6 +150,137 @@ void main() {
 
       expect(find.text('¥350'), findsOneWidget);
     });
+
+    testWidgets('saved price can be corrected from the result', (tester) async {
+      await tester.pumpWidget(buildTestApp());
+      await tester.pump();
+      controller.startScan();
+      await _settle(tester);
+
+      barcodeAdapter.add(_barcode);
+      await _settle(tester);
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.add(
+          const PriceCandidate(
+            priceYen: 398,
+            confidence: 0.9,
+            region: _nearPriceRegion,
+            rawTexts: ['398'],
+          ),
+        );
+        await _settle(tester);
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('¥398'), findsOneWidget);
+
+      await tester.tap(find.text('訂正'));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // The sheet opens prefilled with the saved price.
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        '398',
+      );
+      await tester.enterText(find.byType(TextField), '350');
+      await _settle(tester);
+      await tester.tap(find.text('特売'));
+      await _settle(tester);
+      await tester.drag(
+        find.byType(SingleChildScrollView),
+        const Offset(0, -300),
+      );
+      await _settle(tester);
+      await tester.tap(find.text('保存する'));
+      await _settle(tester);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('¥350'), findsOneWidget);
+    });
+
+    testWidgets('async correction disables a second save', (tester) async {
+      final pending = Completer<bool>();
+      var calls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showManualPriceSheet(
+                  context,
+                  controller,
+                  initialPriceYen: 398,
+                  onSaveEntry: (_) {
+                    calls++;
+                    return pending.future;
+                  },
+                ),
+                child: const Text('訂正を開く'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('訂正を開く'));
+      await tester.pumpAndSettle();
+
+      final saveButton = find.widgetWithText(FilledButton, '保存する');
+      await tester.tap(saveButton);
+      await tester.pump();
+      expect(calls, 1);
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNull);
+      await tester.tap(saveButton);
+      await tester.pump();
+      expect(calls, 1);
+
+      pending.complete(true);
+      await tester.pumpAndSettle();
+      expect(find.text('訂正を開く'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('dismissed correction ignores late failed callback', (
+      tester,
+    ) async {
+      final pending = Completer<bool>();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showManualPriceSheet(
+                  context,
+                  controller,
+                  initialPriceYen: 398,
+                  onSaveEntry: (_) => pending.future,
+                ),
+                child: const Text('訂正を開く'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('訂正を開く'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('保存する'));
+      await tester.pump();
+
+      // Sheet may be dismissed by the route while the write is pending.
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+      pending.complete(false);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    });
+
+    test('correctLatestPrice without JAN returns false', () async {
+      expect(
+        await controller.correctLatestPrice(
+          priceYen: 350,
+          isTaxInclusive: true,
+        ),
+        isFalse,
+      );
+    });
   });
 }
 
@@ -173,6 +306,7 @@ class _ControllablePriceAdapter implements PriceOcrAdapter {
   @override
   Stream<List<PriceCandidate>> get results => _controller.stream;
 
+  void add(PriceCandidate candidate) => _controller.add([candidate]);
   Future<void> close() => _controller.close();
 
   @override
