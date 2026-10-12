@@ -523,7 +523,9 @@ void main() {
       expect(await validPrices(), [398]);
     });
 
-    test('correction cannot retire a row belonging to another product', () async {
+    test(
+      'correction cannot retire a row belonging to another product',
+      () async {
       await saveOcrPrice(398);
       final source = await repository.findProductByJan(_barcode.barcode);
       final original = (await repository.getValidObservations(
@@ -553,9 +555,12 @@ void main() {
         ),
         isEmpty,
       );
-    });
+      },
+    );
 
-    test('duplicate corrected price rolls back retirement of original', () async {
+    test(
+      'duplicate corrected price rolls back retirement of original',
+      () async {
       await saveOcrPrice(398);
       final product = await repository.findProductByJan(_barcode.barcode);
       final original = (await repository.getValidObservations(
@@ -587,7 +592,8 @@ void main() {
       );
       expect(after.map((o) => o.priceYen).toSet(), {398, 350});
       expect(after.singleWhere((o) => o.id == original.id).isValid, isTrue);
-    });
+      },
+    );
 
     test('correction never touches another product', () async {
       const otherJan = '4901111111111';
