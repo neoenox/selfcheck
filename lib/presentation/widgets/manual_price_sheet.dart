@@ -31,6 +31,7 @@ Future<ManualSaveOutcome?> showManualPriceSheet(
   BuildContext context,
   ScanScreenController controller, {
   int? initialPriceYen,
+  ManualPriceEntry? initialEntry,
   Future<bool> Function(ManualPriceEntry entry)? onSaveEntry,
 }) {
   return showModalBottomSheet<ManualSaveOutcome>(
@@ -43,6 +44,7 @@ Future<ManualSaveOutcome?> showManualPriceSheet(
       child: _ManualPriceForm(
         controller: controller,
         initialPriceYen: initialPriceYen,
+        initialEntry: initialEntry,
         onSaveEntry: onSaveEntry,
       ),
     ),
@@ -53,11 +55,13 @@ class _ManualPriceForm extends StatefulWidget {
   const _ManualPriceForm({
     required this.controller,
     this.initialPriceYen,
+    this.initialEntry,
     this.onSaveEntry,
   });
 
   final ScanScreenController controller;
   final int? initialPriceYen;
+  final ManualPriceEntry? initialEntry;
 
   /// Overrides the default submit path (used for price correction).
   final Future<bool> Function(ManualPriceEntry entry)? onSaveEntry;
@@ -70,7 +74,15 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
   late final TextEditingController _priceController = TextEditingController(
     text: widget.initialPriceYen?.toString() ?? '',
   );
-  _PriceKind _kind = _PriceKind.regular;
+  late _PriceKind _kind = widget.initialEntry?.isBulkDiscount == true
+      ? _PriceKind.bulk
+      : widget.initialEntry?.isCouponPriceVisible == true
+      ? _PriceKind.coupon
+      : widget.initialEntry?.isMemberPriceVisible == true
+      ? _PriceKind.member
+      : widget.initialEntry?.isSaleVisible == true
+      ? _PriceKind.sale
+      : _PriceKind.regular;
   bool _isTaxInclusive = true;
   String? _submitError;
   bool _saving = false;
@@ -160,15 +172,17 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
                 ),
               ),
             ),
-            const Text(
-              '価格を手入力',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            Text(
+              widget.onSaveEntry == null ? '価格を手入力' : '価格を訂正',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             ListenableBuilder(
               listenable: widget.controller,
               builder: (context, _) {
-                final jan = widget.controller.pendingJanCode;
+                final jan = widget.onSaveEntry == null
+                    ? widget.controller.pendingJanCode
+                    : widget.controller.uiState.janCode;
                 return Text(
                   jan == null ? 'バーコード未読取：保存は読取後に自動実行されます' : '保存先JAN：$jan',
                   style: TextStyle(

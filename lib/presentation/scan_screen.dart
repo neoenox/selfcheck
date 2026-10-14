@@ -49,7 +49,13 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Future<void> _openManualPriceSheet(BuildContext context) async {
-    final outcome = await showManualPriceSheet(context, widget.controller);
+    if (!widget.controller.beginManualEntry()) return;
+    ManualSaveOutcome? outcome;
+    try {
+      outcome = await showManualPriceSheet(context, widget.controller);
+    } finally {
+      widget.controller.endManualEntry();
+    }
     if (outcome != null &&
         outcome.saved &&
         !outcome.janKnown &&
@@ -68,6 +74,7 @@ class _ScanScreenState extends State<ScanScreen>
       context,
       widget.controller,
       initialPriceYen: currentPrice,
+      initialEntry: widget.controller.resultPriceContext,
       onSaveEntry: (entry) => widget.controller.correctLatestPrice(
         priceYen: entry.priceYen,
         isTaxInclusive: entry.isTaxInclusive,
@@ -89,7 +96,7 @@ class _ScanScreenState extends State<ScanScreen>
         fit: StackFit.expand,
         children: [
           widget.cameraPreview,
-          if (state.isScanning) _buildScanGuide(),
+          if (state.isScanning) IgnorePointer(child: _buildScanGuide()),
           ScanOverlay(scanState: state.scanState),
           if (state.isShowingResult && state.comparisonResult != null)
             _buildResultOverlay(context, state),
@@ -328,8 +335,18 @@ class _ScanScreenState extends State<ScanScreen>
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: PriceContextBadges(
-                    isSaleVisible: false,
-                    isMemberPriceVisible: false,
+                    isSaleVisible:
+                        widget.controller.resultPriceContext?.isSaleVisible,
+                    isMemberPriceVisible: widget
+                        .controller
+                        .resultPriceContext
+                        ?.isMemberPriceVisible,
+                    isCouponPriceVisible: widget
+                        .controller
+                        .resultPriceContext
+                        ?.isCouponPriceVisible,
+                    isBulkDiscount:
+                        widget.controller.resultPriceContext?.isBulkDiscount,
                   ),
                 ),
               ResultCard(

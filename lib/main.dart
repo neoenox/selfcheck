@@ -169,12 +169,16 @@ class _ScanScreenEntryState extends State<ScanScreenEntry>
     return ScanScreen(
       controller: _controller,
       cameraPreview: AnimatedBuilder(
-        animation: _cameraPipeline,
+        animation: Listenable.merge([_cameraPipeline, _controller]),
         builder: (context, _) {
           if (_cameraPipeline.initializationError != null) {
             return CameraUnavailableView(onRetry: _ensureCameraReady);
           }
-          return CameraPreviewSurface(pipeline: _cameraPipeline);
+          return CameraPreviewSurface(
+            pipeline: _cameraPipeline,
+            selectedJan: _controller.selectedJan,
+            onBarcodeSelected: _controller.selectBarcode,
+          );
         },
       ),
     );

@@ -405,6 +405,43 @@ void main() {
       return [for (final o in observations) o.priceYen];
     }
 
+    test(
+      'corrects the displayed duplicate row, not a newer different price',
+      () async {
+        await saveOcrPrice(398);
+        final product = await repository.findProductByJan(_barcode.barcode);
+        await repository.insertObservationWithDate(
+          productId: product!.id,
+          priceYen: 450,
+          priceConfidence: 0.9,
+          observedAt: DateTime.now().add(const Duration(seconds: 10)),
+        );
+        coordinator.resetToIdle();
+        await saveOcrPrice(398);
+        expect(
+          await coordinator.correctLatestObservation(
+            jan: _barcode.barcode,
+            entry: _manualSale,
+          ),
+          isTrue,
+        );
+        expect((await validPrices()).toSet(), {350, 450});
+      },
+    );
+
+    test('correction excludes itself from its comparison baseline', () async {
+      await saveOcrPrice(398);
+      final results = <domain.ComparisonResult>[];
+      final subscription = coordinator.resultStream.listen(results.add);
+      await coordinator.correctLatestObservation(
+        jan: _barcode.barcode,
+        entry: _manualSale,
+      );
+      await _flush();
+      expect(results.last.status, domain.ComparisonStatus.firstPrice);
+      await subscription.cancel();
+    });
+
     test('corrects the latest observation and refreshes the result', () async {
       await saveOcrPrice(398);
       expect(await validPrices(), [398]);
@@ -595,47 +632,51 @@ void main() {
       },
     );
 
-    test('correction never touches another product', () async {
-      const otherJan = '4901111111111';
-      const otherBarcode = BarcodeCandidate(
-        barcode: otherJan,
-        format: BarcodeFormat.ean13,
-        confidence: 0.95,
-        region: _barcodeRegion,
-      );
-
-      await saveOcrPrice(398);
-
-      coordinator.resetToIdle();
-      coordinator.startScan();
-      barcodeAdapter.add(otherBarcode);
-      await _flush();
-      for (var i = 0; i < 3; i++) {
-        priceAdapter.addFrame([_price(450)]);
-        await _flush();
-      }
-      await _flush(100);
-      expect(coordinator.currentState, ScanState.result);
-
-      final ok = await coordinator.correctLatestObservation(
-        jan: _barcode.barcode,
-        entry: _manualSale,
-      );
-      expect(ok, isTrue);
-
-      Future<List<int>> pricesFor(String jan) async {
-        final product = await repository.findProductByJan(jan);
-        final observations = await repository.getValidObservations(
-          productId: product!.id,
-          since: DateTime.now().subtract(const Duration(minutes: 1)),
-          limit: 10,
+    test(
+      'a stale correction request cannot change another displayed result',
+      () async {
+        const otherJan = '4901111111111';
+        const otherBarcode = BarcodeCandidate(
+          barcode: otherJan,
+          format: BarcodeFormat.ean13,
+          confidence: 0.95,
+          region: _barcodeRegion,
         );
-        return [for (final o in observations) o.priceYen];
-      }
 
-      expect(await pricesFor(_barcode.barcode), [350]);
-      expect(await pricesFor(otherJan), [450]);
-    });
+        await saveOcrPrice(398);
+
+        coordinator.resetToIdle();
+        coordinator.startScan();
+        barcodeAdapter.add(otherBarcode);
+        await _flush();
+        for (var i = 0; i < 3; i++) {
+          priceAdapter.addFrame([_price(450)]);
+          await _flush();
+        }
+        await _flush(100);
+        expect(coordinator.currentState, ScanState.result);
+
+        final ok = await coordinator.correctLatestObservation(
+          jan: _barcode.barcode,
+          entry: _manualSale,
+        );
+
+        expect(ok, isFalse);
+
+        Future<List<int>> pricesFor(String jan) async {
+          final product = await repository.findProductByJan(jan);
+          final observations = await repository.getValidObservations(
+            productId: product!.id,
+            since: DateTime.now().subtract(const Duration(minutes: 1)),
+            limit: 10,
+          );
+          return [for (final o in observations) o.priceYen];
+        }
+
+        expect(await pricesFor(_barcode.barcode), [398]);
+        expect(await pricesFor(otherJan), [450]);
+      },
+    );
   });
   group('manual confidence (B案)', () {
     late PriceRepository repository;

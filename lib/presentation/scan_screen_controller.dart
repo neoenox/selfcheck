@@ -64,7 +64,9 @@ class ScanScreenUiState {
   bool get canStartScan =>
       scanState == ScanState.idle || scanState == ScanState.error;
   bool get isScanning =>
-      scanState == ScanState.scanning || scanState == ScanState.waitingPrice;
+      scanState == ScanState.scanning ||
+      scanState == ScanState.waitingPrice ||
+      scanState == ScanState.noProduct;
   bool get isShowingResult => scanState == ScanState.result;
   bool get isError => scanState == ScanState.error;
 
@@ -163,6 +165,13 @@ class ScanScreenController extends ChangeNotifier {
 
   /// JAN currently awaiting a price, if a barcode was already recognized.
   String? get pendingJanCode => _coordinator.pendingJanCode;
+  String? get selectedJan => _coordinator.selectedJan;
+  ManualPriceEntry? get resultPriceContext => _coordinator.resultPriceContext;
+  bool beginManualEntry() => _coordinator.beginManualEntry();
+  void endManualEntry() => _coordinator.endManualEntry();
+  void selectBarcode(String jan) {
+    _coordinator.selectBarcode(jan);
+  }
 
   /// Corrects the latest saved observation for the current JAN.
   /// Returns false when there is nothing to correct or the entry invalid.

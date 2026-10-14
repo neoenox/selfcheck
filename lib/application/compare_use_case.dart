@@ -30,16 +30,34 @@ class CompareUseCase {
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
     bool? isManualEntry,
+    String? excludeObservationId,
   }) async {
     // Fetch historical observations first (before inserting current)
     final since = DateTime.now().subtract(
       const Duration(days: ComparisonPolicy.validObservationDays),
     );
-    final observations = await _repository.getValidObservations(
+    final fetched = await _repository.getValidObservations(
       productId: productId,
       since: since,
-      limit: ComparisonPolicy.maxObservationsForMedian,
+      limit:
+          ComparisonPolicy.maxObservationsForMedian +
+          (excludeObservationId == null ? 0 : 1),
     );
+    final observations = fetched
+        .where((o) => o.id != excludeObservationId)
+        .take(ComparisonPolicy.maxObservationsForMedian)
+        .toList();
+    String? observationId = excludeObservationId;
+    if (skipInsert && observationId == null) {
+      final matching = fetched.where(
+        (o) =>
+            o.priceYen == currentPriceYen &&
+            !o.observedAt.isBefore(
+              DateTime.now().subtract(const Duration(minutes: 5)),
+            ),
+      );
+      if (matching.isNotEmpty) observationId = matching.first.id;
+    }
 
     // Cancellation can happen while the historical query is in flight. Check
     // again at the commit boundary so a cancelled session cannot persist.
@@ -49,7 +67,7 @@ class CompareUseCase {
 
     // Save current observation (unless caller says it's a duplicate)
     if (!skipInsert) {
-      await _repository.insertObservation(
+      final saved = await _repository.insertObservation(
         productId: productId,
         priceYen: currentPriceYen,
         priceConfidence: currentConfidence,
@@ -59,10 +77,13 @@ class CompareUseCase {
         isBulkDiscount: isBulkDiscount,
         isManualEntry: isManualEntry,
       );
+      observationId = saved.id;
     }
 
     if (observations.isEmpty) {
-      return ComparisonResult.firstPrice(currentPriceYen);
+      return ComparisonResult.firstPrice(
+        currentPriceYen,
+      ).withObservationId(observationId);
     }
 
     final prices = observations.map((o) => o.priceYen).toList()..sort();
@@ -73,7 +94,7 @@ class CompareUseCase {
         currentPrice: currentPriceYen,
         lastPrice: median,
         observationCount: observations.length,
-      );
+      ).withObservationId(observationId);
     }
 
     final diffYen = currentPriceYen - median;
@@ -87,7 +108,7 @@ class CompareUseCase {
       diffRate: diffRate,
       label: label,
       observationCount: observations.length,
-    );
+    ).withObservationId(observationId);
   }
 
   /// Returns the mathematical median rounded to the nearest whole yen.

@@ -39,6 +39,10 @@ class ScanCoordinator {
 
   /// JAN associated with the most recently completed comparison result.
   String? _resultJanCode;
+  String? _resultObservationId;
+  String? _resultProductId;
+  ManualPriceEntry? _resultPriceContext;
+  ManualPriceEntry? get resultPriceContext => _resultPriceContext;
   String? get resultJanCode => _resultJanCode;
 
   /// Cached barcode candidate while waiting for a stable price.
@@ -74,6 +78,12 @@ class ScanCoordinator {
 
   StreamSubscription<BarcodeCandidate>? _barcodeSubscription;
   StreamSubscription<List<PriceCandidate>>? _priceSubscription;
+  StreamSubscription<RecognitionFrame>? _frameSubscription;
+  RecognitionFrame? _latestFrame;
+  String? _selectedJan;
+  bool _userSelectedBarcode = false;
+  bool _manualInputActive = false;
+  String? get selectedJan => _selectedJan;
 
   ScanCoordinator({
     required this._repository,
@@ -88,6 +98,7 @@ class ScanCoordinator {
 
     _sessionGeneration++;
     final generation = _sessionGeneration;
+    _manualInputActive = false;
 
     _cancelSubscriptions();
     _resetRecognitionContext();
@@ -100,6 +111,16 @@ class ScanCoordinator {
     _lastError = null;
     _lastWarning = null;
     _stateController.add(_state);
+
+    final adapter = _barcodeAdapter;
+    if (adapter is FrameBarcodeRecognizerAdapter) {
+      _frameSubscription = adapter.frames.listen(
+        (frame) => _onRecognitionFrame(frame, generation),
+        onError: (Object error, StackTrace trace) =>
+            _handleAdapterError('認識エラー', error, trace, generation),
+      );
+      return;
+    }
 
     _barcodeSubscription = _barcodeAdapter.results.listen(
       (barcode) {
@@ -132,9 +153,113 @@ class ScanCoordinator {
     );
   }
 
-  /// Corrects the latest saved observation for [jan] with user-entered values.
+  bool selectBarcode(String jan) {
+    if (_state != ScanState.scanning && _state != ScanState.waitingPrice) {
+      return false;
+    }
+    final matches = _latestFrame?.barcodes.where((b) => b.barcode == jan);
+    if (matches == null || matches.isEmpty) return false;
+    _selectedJan = jan;
+    _userSelectedBarcode = true;
+    _pendingBarcode = matches.first;
+    _stabilizer.reset();
+    _clearWarning();
+    _state = ScanState.waitingPrice;
+    _stateController.add(_state);
+    return true;
+  }
+
+  bool beginManualEntry() {
+    if (_state != ScanState.scanning &&
+        _state != ScanState.waitingPrice &&
+        _state != ScanState.noProduct) {
+      return false;
+    }
+    _manualInputActive = true;
+    _stabilizer.reset();
+    return true;
+  }
+
+  void endManualEntry() {
+    _manualInputActive = false;
+    _stabilizer.reset();
+  }
+
+  void _onRecognitionFrame(RecognitionFrame frame, int generation) {
+    if (!_isCurrentSession(generation) ||
+        (_state != ScanState.scanning && _state != ScanState.waitingPrice)) {
+      return;
+    }
+    _latestFrame = frame;
+    final codes = {for (final b in frame.barcodes) b.barcode: b};
+    if (codes.length > 1 && !_userSelectedBarcode) {
+      _selectedJan = null;
+      _pendingBarcode = null;
+      _stabilizer.reset();
+      _showRecognitionHint('対象のバーコード枠をタップしてください');
+      return;
+    }
+    if (_selectedJan == null && codes.length == 1) {
+      _selectedJan = codes.keys.single;
+    }
+    final barcode = codes[_selectedJan];
+    if (barcode == null) {
+      _pendingBarcode = null;
+      _stabilizer.reset();
+      if (_selectedJan != null) {
+        _showRecognitionHint('選択したバーコードと値札を同じ画面に入れてください');
+      }
+      return;
+    }
+    _pendingBarcode = barcode;
+    if (_state != ScanState.waitingPrice) {
+      _state = ScanState.waitingPrice;
+      _stateController.add(_state);
+    }
+    if (_manualInputActive) return;
+    final manual = _manualEntry;
+    if (manual != null) {
+      _manualEntry = null;
+      unawaited(
+        _compare(
+          barcode,
+          manual.priceYen,
+          manual.confidence,
+          generation,
+          isSaleVisible: manual.isSaleVisible,
+          isMemberPriceVisible: manual.isMemberPriceVisible,
+          isCouponPriceVisible: manual.isCouponPriceVisible,
+          isBulkDiscount: manual.isBulkDiscount,
+          isManualEntry: true,
+        ),
+      );
+      return;
+    }
+    final prices = frame.prices
+        .where((p) => regionsAreSafelyAssociated(barcode.region, p.region))
+        .toList();
+    if (prices.isEmpty) {
+      _stabilizer.reset();
+      _showRecognitionHint('税込価格を確認できない場合は「価格を手入力」を使ってください');
+      return;
+    }
+    _clearWarning();
+    if (!_stabilizer.submitFrame(prices)) return;
+    final selected = _stabilizer.stableCandidates.first;
+    unawaited(
+      _compare(barcode, selected.priceYen, selected.confidence, generation),
+    );
+  }
+
+  void _showRecognitionHint(String message) {
+    if (_lastWarning == message) return;
+    _lastWarning = message;
+    _warningController.add(message);
+  }
+
+  /// Corrects exactly the observation displayed in the current result.
   ///
-  /// Only available once a scan settled (result) or is idle: it must never
+  /// Only available for the currently displayed result: it must never
   /// interfere with an active recognition session. Retirement and re-insert
   /// happen atomically inside the repository, so a failed correction can
   /// never lose price history. Returns false when there is nothing to
@@ -143,25 +268,21 @@ class ScanCoordinator {
     required String jan,
     required ManualPriceEntry entry,
   }) async {
-    if (_state != ScanState.result && _state != ScanState.idle) return false;
+    if (_state != ScanState.result || jan != _resultJanCode) return false;
     if (entry.priceYen < 1 || entry.priceYen > 99999 || !entry.isTaxInclusive) {
       return false;
     }
 
-    final product = await _repository.findProductByJan(jan);
-    if (product == null) return false;
-    final observations = await _repository.getValidObservations(
-      productId: product.id,
-      since: DateTime.fromMillisecondsSinceEpoch(0),
-      limit: 1,
-    );
-    if (observations.isEmpty) return false;
-
+    final oldId = _resultObservationId;
+    final productId = _resultProductId;
+    if (oldId == null || productId == null) return false;
     final generation = _sessionGeneration;
+    _state = ScanState.comparing;
+    _stateController.add(_state);
     try {
-      await _repository.replaceObservation(
-        oldId: observations.first.id,
-        productId: product.id,
+      final corrected = await _repository.replaceObservation(
+        oldId: oldId,
+        productId: productId,
         priceYen: entry.priceYen,
         priceConfidence: entry.confidence,
         isSaleVisible: entry.isSaleVisible,
@@ -170,8 +291,15 @@ class ScanCoordinator {
         isBulkDiscount: entry.isBulkDiscount,
         isManualEntry: true,
       );
+      if (!_isCurrentSession(generation)) return false;
+      _resultObservationId = corrected.id;
+      _resultPriceContext = entry;
     } on Object {
       // The transaction rolled back: the previous observation is intact.
+      if (_isCurrentSession(generation)) {
+        _state = ScanState.result;
+        _stateController.add(_state);
+      }
       return false;
     }
     if (!_isCurrentSession(generation)) return false;
@@ -183,9 +311,10 @@ class ScanCoordinator {
       // The corrected row is already persisted; only recompute the result.
       final result = await _compareUseCase.compare(
         currentPriceYen: entry.priceYen,
-        productId: product.id,
+        productId: productId,
         currentConfidence: entry.confidence,
         skipInsert: true,
+        excludeObservationId: _resultObservationId,
         isSessionValid: () => _isCurrentSession(generation),
         isSaleVisible: entry.isSaleVisible,
         isMemberPriceVisible: entry.isMemberPriceVisible,
@@ -270,6 +399,7 @@ class ScanCoordinator {
 
   void _transitionToIdle() {
     _sessionGeneration++;
+    _manualInputActive = false;
     _cancelSubscriptions();
     _resetRecognitionContext();
     _manualEntry = null;
@@ -315,7 +445,7 @@ class ScanCoordinator {
     final associated = _stabilizer.stableCandidates
         .where((c) => regionsAreSafelyAssociated(barcode.region, c.region))
         .toList();
-    if (associated.isNotEmpty) {
+    if (associated.isNotEmpty && !_manualInputActive) {
       final selected = associated.first;
       unawaited(
         _compare(barcode, selected.priceYen, selected.confidence, generation),
@@ -337,6 +467,7 @@ class ScanCoordinator {
     int generation,
   ) async {
     if (!_isCurrentSession(generation)) return;
+    if (_manualInputActive) return;
     if (_state != ScanState.scanning && _state != ScanState.waitingPrice) {
       return;
     }
@@ -453,6 +584,16 @@ class ScanCoordinator {
       if (!_isCurrentSession(generation)) return;
 
       _resultJanCode = barcode.barcode;
+      _resultObservationId = result.observationId;
+      _resultProductId = product.id;
+      _resultPriceContext = ManualPriceEntry(
+        priceYen: priceYen,
+        isTaxInclusive: true,
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+      );
       _resultController.add(result);
       _cancelSubscriptions();
       _resetRecognitionContext();
@@ -571,9 +712,15 @@ class ScanCoordinator {
   void _resetRecognitionContext() {
     _stabilizer.reset();
     _pendingBarcode = null;
+    _latestFrame = null;
+    _selectedJan = null;
+    _userSelectedBarcode = false;
   }
 
   void _cancelSubscriptions() {
+    final frames = _frameSubscription;
+    _frameSubscription = null;
+    if (frames != null) unawaited(frames.cancel());
     final barcodeSubscription = _barcodeSubscription;
     final priceSubscription = _priceSubscription;
     _barcodeSubscription = null;
@@ -604,6 +751,11 @@ abstract class BarcodeRecognizerAdapter {
   Stream<BarcodeCandidate> get results;
   void pause();
   void resume();
+}
+
+abstract class FrameBarcodeRecognizerAdapter
+    implements BarcodeRecognizerAdapter {
+  Stream<RecognitionFrame> get frames;
 }
 
 abstract class PriceOcrAdapter {
