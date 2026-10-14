@@ -526,13 +526,26 @@ void main() {
       // The wrapper sees the real product and history but fails the
       // atomic replacement itself.
       final failing = _FailingReplaceRepository(repository);
+      final retryBarcode = _ControllableBarcodeAdapter();
+      final retryPrice = _ControllablePriceAdapter();
       final failingCoordinator = ScanCoordinator(
         repository: failing,
         compareUseCase: CompareUseCase(failing),
-        barcodeAdapter: _ControllableBarcodeAdapter(),
-        priceAdapter: _ControllablePriceAdapter(),
+        barcodeAdapter: retryBarcode,
+        priceAdapter: retryPrice,
       );
       addTearDown(failingCoordinator.dispose);
+      addTearDown(retryBarcode.close);
+      addTearDown(retryPrice.close);
+      failingCoordinator.startScan();
+      retryBarcode.add(_barcode);
+      await _flush();
+      for (var i = 0; i < 3; i++) {
+        retryPrice.addFrame([_price(398)]);
+        await _flush();
+      }
+      await _flush(100);
+      expect(failingCoordinator.currentState, ScanState.result);
 
       final ok = await failingCoordinator.correctLatestObservation(
         jan: _barcode.barcode,
@@ -540,6 +553,7 @@ void main() {
       );
 
       expect(ok, isFalse);
+      expect(failingCoordinator.currentState, ScanState.result);
       expect(await validPrices(), [398]);
     });
 
