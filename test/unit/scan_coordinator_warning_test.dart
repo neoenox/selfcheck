@@ -7,6 +7,8 @@ import 'package:selfcheck_jibun_check/domain/scan_state.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
 import 'package:selfcheck_jibun_check/infrastructure/database/app_database.dart';
+import 'package:selfcheck_jibun_check/infrastructure/recognition_failure.dart';
+import 'package:flutter/services.dart';
 
 const _barcodeRegion = Rect(left: 0, top: 0, right: 100, bottom: 50);
 const _nearPriceRegion = Rect(left: 0, top: 50, right: 100, bottom: 100);
@@ -52,6 +54,21 @@ void main() {
       repository.dispose();
       await barcodeAdapter.close();
       await priceAdapter.close();
+    });
+
+    test('native recognition diagnostics reach the visible warning', () async {
+      coordinator.startScan();
+      priceAdapter.addError(
+        RecognitionFailure(
+          stage: RecognitionStage.price,
+          cause: PlatformException(code: '14', message: 'Failed to load model'),
+          imageDescription: '640x480 format=17',
+        ),
+      );
+      await _flush();
+      expect(coordinator.lastWarning, contains('価格の文字認識'));
+      expect(coordinator.lastWarning, contains('14: Failed to load model'));
+      expect(coordinator.currentState, ScanState.scanning);
     });
 
     test('transient adapter error warns without stopping the scan', () async {

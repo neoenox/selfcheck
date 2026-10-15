@@ -6,6 +6,7 @@ import '../domain/comparison_result.dart';
 import '../domain/scan_state.dart';
 import '../infrastructure/price_repository.dart';
 import '../infrastructure/price_stabilizer.dart';
+import '../infrastructure/recognition_failure.dart';
 import 'compare_use_case.dart';
 
 /// ScanCoordinator manages the scanning session lifecycle.
@@ -704,6 +705,7 @@ class ScanCoordinator {
         text.contains('CameraAccessDenied')) {
       return 'カメラの権限が必要です。設定から許可してください。';
     }
+    if (error is RecognitionFailure) return error.displayMessage;
     return '予期せぬエラーが発生しました。もう一度お試しください。';
   }
 

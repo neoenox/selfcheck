@@ -236,7 +236,7 @@ class _ScanScreenState extends State<ScanScreen>
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: Text(
+                          child: SelectableText(
                             state.warningMessage!,
                             style: const TextStyle(
                               color: Colors.white,

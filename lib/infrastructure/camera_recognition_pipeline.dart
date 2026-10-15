@@ -12,6 +12,7 @@ import '../application/scan_coordinator.dart';
 import '../domain/scan_state.dart';
 import 'price_text_parser.dart';
 import 'recognition_failure_policy.dart';
+import 'recognition_failure.dart';
 import '../presentation/widgets/barcode_selection_overlay.dart';
 
 /// Owns the live camera and on-device ML Kit recognizers.
@@ -200,6 +201,7 @@ class CameraRecognitionPipeline extends ChangeNotifier {
     _processing = true;
     final recognitionGeneration = _recognitionGeneration;
     var frameFailed = false;
+    var stage = RecognitionStage.image;
     try {
       final inputImage = _toInputImage(image);
       if (inputImage == null || !_isCurrentCameraOperation(generation)) {
@@ -209,12 +211,14 @@ class CameraRecognitionPipeline extends ChangeNotifier {
       var framePrices = <PriceCandidate>[];
 
       if (_barcodeEnabled) {
+        stage = RecognitionStage.barcode;
         final barcodes = await _barcodeScanner.processImage(inputImage);
         if (!_isCurrentCameraOperation(generation) ||
             !_barcodeEnabled ||
             recognitionGeneration != _recognitionGeneration) {
           return;
         }
+        stage = RecognitionStage.result;
         for (final barcode in barcodes) {
           final candidate = _toBarcodeCandidate(barcode);
           if (candidate != null && !_barcodeResults.isClosed) {
@@ -225,12 +229,14 @@ class CameraRecognitionPipeline extends ChangeNotifier {
       }
 
       if (_priceEnabled && _isCurrentCameraOperation(generation)) {
+        stage = RecognitionStage.price;
         final recognizedText = await _textRecognizer.processImage(inputImage);
         if (!_isCurrentCameraOperation(generation) ||
             !_priceEnabled ||
             recognitionGeneration != _recognitionGeneration) {
           return;
         }
+        stage = RecognitionStage.result;
         final candidates = parsePriceCandidates(
           recognizedText.blocks.expand(
             (block) => block.lines.map(
@@ -279,7 +285,17 @@ class CameraRecognitionPipeline extends ChangeNotifier {
         fatal: _isFatalRecognitionError(error),
       );
       if (shouldNotify) {
-        _publishRecognitionError(error, stackTrace);
+        _publishRecognitionError(
+          RecognitionFailure(
+            stage: stage,
+            cause: error,
+            imageDescription:
+                '${image.width}x${image.height} format=${image.format.raw} '
+                'planes=${image.planes.length} '
+                'bytes=${image.planes.fold<int>(0, (sum, plane) => sum + plane.bytes.length)}',
+          ),
+          stackTrace,
+        );
       }
     } finally {
       if (!frameFailed) {
