@@ -7,3 +7,10 @@
 -dontwarn com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 -dontwarn com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions$Builder
 -dontwarn com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
+
+# ML Kit discovers these registrars through AndroidManifest metadata and
+# invokes their no-argument constructors through reflection. R8 full mode
+# otherwise removes the constructors, leaving ML Kit components uninitialized.
+-keep class com.google.mlkit.** implements com.google.firebase.components.ComponentRegistrar {
+    public <init>();
+}
