@@ -49,7 +49,13 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Future<void> _openManualPriceSheet(BuildContext context) async {
-    final outcome = await showManualPriceSheet(context, widget.controller);
+    if (!widget.controller.beginManualEntry()) return;
+    ManualSaveOutcome? outcome;
+    try {
+      outcome = await showManualPriceSheet(context, widget.controller);
+    } finally {
+      widget.controller.endManualEntry();
+    }
     if (outcome != null &&
         outcome.saved &&
         !outcome.janKnown &&
@@ -58,6 +64,26 @@ class _ScanScreenState extends State<ScanScreen>
         context,
       ).showSnackBar(const SnackBar(content: Text('バーコードをスキャンすると自動で保存されます')));
     }
+  }
+
+  Future<void> _openCorrectionSheet(
+    BuildContext context,
+    int currentPrice,
+  ) async {
+    await showManualPriceSheet(
+      context,
+      widget.controller,
+      initialPriceYen: currentPrice,
+      initialEntry: widget.controller.resultPriceContext,
+      onSaveEntry: (entry) => widget.controller.correctLatestPrice(
+        priceYen: entry.priceYen,
+        isTaxInclusive: entry.isTaxInclusive,
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+      ),
+    );
   }
 
   @override
@@ -70,10 +96,10 @@ class _ScanScreenState extends State<ScanScreen>
         fit: StackFit.expand,
         children: [
           widget.cameraPreview,
-          if (state.isScanning) _buildScanGuide(),
+          if (state.isScanning) IgnorePointer(child: _buildScanGuide()),
           ScanOverlay(scanState: state.scanState),
           if (state.isShowingResult && state.comparisonResult != null)
-            _buildResultOverlay(state),
+            _buildResultOverlay(context, state),
           _buildTopBar(state),
           _buildBottomControls(state),
         ],
@@ -210,7 +236,7 @@ class _ScanScreenState extends State<ScanScreen>
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: Text(
+                          child: SelectableText(
                             state.warningMessage!,
                             style: const TextStyle(
                               color: Colors.white,
@@ -275,7 +301,7 @@ class _ScanScreenState extends State<ScanScreen>
     );
   }
 
-  Widget _buildResultOverlay(ScanScreenUiState state) {
+  Widget _buildResultOverlay(BuildContext context, ScanScreenUiState state) {
     // DraggableScrollableSheet requires bounded height constraints, so it is
     // placed as a direct Stack child (loose bounded constraints) rather than
     // inside a bottom-anchored Positioned, which would give it an infinite
@@ -309,8 +335,18 @@ class _ScanScreenState extends State<ScanScreen>
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: PriceContextBadges(
-                    isSaleVisible: false,
-                    isMemberPriceVisible: false,
+                    isSaleVisible:
+                        widget.controller.resultPriceContext?.isSaleVisible,
+                    isMemberPriceVisible: widget
+                        .controller
+                        .resultPriceContext
+                        ?.isMemberPriceVisible,
+                    isCouponPriceVisible: widget
+                        .controller
+                        .resultPriceContext
+                        ?.isCouponPriceVisible,
+                    isBulkDiscount:
+                        widget.controller.resultPriceContext?.isBulkDiscount,
                   ),
                 ),
               ResultCard(
@@ -320,6 +356,12 @@ class _ScanScreenState extends State<ScanScreen>
                 onScanAgain: () {
                   widget.controller.dismissResult();
                   widget.controller.startScan();
+                },
+                onCorrectPrice: () {
+                  final currentPrice = state.comparisonResult?.currentPrice;
+                  if (currentPrice != null) {
+                    _openCorrectionSheet(context, currentPrice);
+                  }
                 },
               ),
               const SizedBox(height: 16),

@@ -5,6 +5,7 @@ import 'package:selfcheck_jibun_check/application/compare_use_case.dart';
 import 'package:selfcheck_jibun_check/application/scan_coordinator.dart';
 import 'package:selfcheck_jibun_check/domain/comparison_result.dart' as domain;
 import 'package:selfcheck_jibun_check/domain/scan_state.dart';
+import 'package:selfcheck_jibun_check/infrastructure/database/app_database.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository.dart';
 import 'package:selfcheck_jibun_check/infrastructure/price_repository_impl.dart';
 
@@ -355,6 +356,429 @@ void main() {
       );
     });
   });
+
+  group('saved price correction', () {
+    late PriceRepository repository;
+    late _ControllableBarcodeAdapter barcodeAdapter;
+    late _ControllablePriceAdapter priceAdapter;
+    late ScanCoordinator coordinator;
+
+    setUp(() async {
+      repository = await createTestRepository();
+      barcodeAdapter = _ControllableBarcodeAdapter();
+      priceAdapter = _ControllablePriceAdapter();
+      coordinator = ScanCoordinator(
+        repository: repository,
+        compareUseCase: CompareUseCase(repository),
+        barcodeAdapter: barcodeAdapter,
+        priceAdapter: priceAdapter,
+      );
+    });
+
+    tearDown(() async {
+      coordinator.dispose();
+      repository.dispose();
+      await barcodeAdapter.close();
+      await priceAdapter.close();
+    });
+
+    Future<void> saveOcrPrice(int value) async {
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      for (var i = 0; i < 3; i++) {
+        priceAdapter.addFrame([_price(value)]);
+        await _flush();
+      }
+      await _flush(100);
+      expect(coordinator.currentState, ScanState.result);
+    }
+
+    Future<List<int>> validPrices() async {
+      final product = await repository.findProductByJan(_barcode.barcode);
+      expect(product, isNotNull);
+      final observations = await repository.getValidObservations(
+        productId: product!.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      return [for (final o in observations) o.priceYen];
+    }
+
+    test(
+      'corrects the displayed duplicate row, not a newer different price',
+      () async {
+        await saveOcrPrice(398);
+        final product = await repository.findProductByJan(_barcode.barcode);
+        await repository.insertObservationWithDate(
+          productId: product!.id,
+          priceYen: 450,
+          priceConfidence: 0.9,
+          observedAt: DateTime.now().add(const Duration(seconds: 10)),
+        );
+        coordinator.resetToIdle();
+        await saveOcrPrice(398);
+        expect(
+          await coordinator.correctLatestObservation(
+            jan: _barcode.barcode,
+            entry: _manualSale,
+          ),
+          isTrue,
+        );
+        expect((await validPrices()).toSet(), {350, 450});
+      },
+    );
+
+    test('correction excludes itself from its comparison baseline', () async {
+      await saveOcrPrice(398);
+      final results = <domain.ComparisonResult>[];
+      final subscription = coordinator.resultStream.listen(results.add);
+      await coordinator.correctLatestObservation(
+        jan: _barcode.barcode,
+        entry: _manualSale,
+      );
+      await _flush();
+      expect(results.last.status, domain.ComparisonStatus.firstPrice);
+      await subscription.cancel();
+    });
+
+    test('corrects the latest observation and refreshes the result', () async {
+      await saveOcrPrice(398);
+      expect(await validPrices(), [398]);
+
+      final ok = await coordinator.correctLatestObservation(
+        jan: _barcode.barcode,
+        entry: _manualSale,
+      );
+
+      expect(ok, isTrue);
+      expect(coordinator.currentState, ScanState.result);
+      expect(await validPrices(), [350]);
+
+      final product = await repository.findProductByJan(_barcode.barcode);
+      final observations = await repository.getValidObservations(
+        productId: product!.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.single.isManualEntry, isTrue);
+      expect(observations.single.isSaleVisible, isTrue);
+    });
+
+    test(
+      'same-price correction reinserts despite the duplicate window',
+      () async {
+        await saveOcrPrice(398);
+
+        final ok = await coordinator.correctLatestObservation(
+          jan: _barcode.barcode,
+          entry: const ManualPriceEntry(priceYen: 398, isTaxInclusive: true),
+        );
+
+        expect(ok, isTrue);
+        expect(await validPrices(), [398]);
+      },
+    );
+
+    test('invalid corrections are rejected without side effects', () async {
+      await saveOcrPrice(398);
+
+      expect(
+        await coordinator.correctLatestObservation(
+          jan: _barcode.barcode,
+          entry: const ManualPriceEntry(priceYen: 0, isTaxInclusive: true),
+        ),
+        isFalse,
+      );
+      expect(
+        await coordinator.correctLatestObservation(
+          jan: _barcode.barcode,
+          entry: const ManualPriceEntry(priceYen: 350, isTaxInclusive: false),
+        ),
+        isFalse,
+      );
+      expect(
+        await coordinator.correctLatestObservation(
+          jan: '0000000000000',
+          entry: _manualSale,
+        ),
+        isFalse,
+      );
+      expect(await validPrices(), [398]);
+    });
+
+    test('correction is rejected during an active session', () async {
+      coordinator.startScan();
+
+      expect(
+        await coordinator.correctLatestObservation(
+          jan: _barcode.barcode,
+          entry: _manualSale,
+        ),
+        isFalse,
+      );
+    });
+
+    test('failed correction keeps the previous observation', () async {
+      await saveOcrPrice(398);
+      expect(await validPrices(), [398]);
+
+      // The wrapper sees the real product and history but fails the
+      // atomic replacement itself.
+      final failing = _FailingReplaceRepository(repository);
+      final retryBarcode = _ControllableBarcodeAdapter();
+      final retryPrice = _ControllablePriceAdapter();
+      final failingCoordinator = ScanCoordinator(
+        repository: failing,
+        compareUseCase: CompareUseCase(failing),
+        barcodeAdapter: retryBarcode,
+        priceAdapter: retryPrice,
+      );
+      addTearDown(failingCoordinator.dispose);
+      addTearDown(retryBarcode.close);
+      addTearDown(retryPrice.close);
+      failingCoordinator.startScan();
+      retryBarcode.add(_barcode);
+      await _flush();
+      for (var i = 0; i < 3; i++) {
+        retryPrice.addFrame([_price(398)]);
+        await _flush();
+      }
+      await _flush(100);
+      expect(failingCoordinator.currentState, ScanState.result);
+
+      final ok = await failingCoordinator.correctLatestObservation(
+        jan: _barcode.barcode,
+        entry: _manualSale,
+      );
+
+      expect(ok, isFalse);
+      expect(failingCoordinator.currentState, ScanState.result);
+      expect(await validPrices(), [398]);
+    });
+
+    test('unknown correction target cannot insert a new price', () async {
+      await saveOcrPrice(398);
+      final product = await repository.findProductByJan(_barcode.barcode);
+      expect(product, isNotNull);
+
+      await expectLater(
+        repository.replaceObservation(
+          oldId: 'missing-observation',
+          productId: product!.id,
+          priceYen: 350,
+          priceConfidence: 0.6,
+        ),
+        throwsStateError,
+      );
+      expect(await validPrices(), [398]);
+    });
+
+    test(
+      'correction cannot retire a row belonging to another product',
+      () async {
+        await saveOcrPrice(398);
+        final source = await repository.findProductByJan(_barcode.barcode);
+        final original = (await repository.getValidObservations(
+          productId: source!.id,
+          since: DateTime.fromMillisecondsSinceEpoch(0),
+          limit: 10,
+        )).single;
+        final other = await repository.createProvisionalProduct(
+          '4902222222222',
+        );
+
+        await expectLater(
+          repository.replaceObservation(
+            oldId: original.id,
+            productId: other.id,
+            priceYen: 350,
+            priceConfidence: 0.6,
+          ),
+          throwsStateError,
+        );
+        expect(await validPrices(), [398]);
+        expect(
+          await repository.getValidObservations(
+            productId: other.id,
+            since: DateTime.fromMillisecondsSinceEpoch(0),
+            limit: 10,
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'duplicate corrected price rolls back retirement of original',
+      () async {
+        await saveOcrPrice(398);
+        final product = await repository.findProductByJan(_barcode.barcode);
+        final original = (await repository.getValidObservations(
+          productId: product!.id,
+          since: DateTime.fromMillisecondsSinceEpoch(0),
+          limit: 10,
+        )).single;
+        await repository.insertObservation(
+          productId: product.id,
+          priceYen: 350,
+          priceConfidence: 0.9,
+        );
+
+        // Existing valid price already owns the 350-yen duplicate slot.
+        // A correction must fail, not retire 398 and return the 350 row.
+        await expectLater(
+          repository.replaceObservation(
+            oldId: original.id,
+            productId: product.id,
+            priceYen: 350,
+            priceConfidence: 0.6,
+          ),
+          throwsA(anything),
+        );
+        final after = await repository.getValidObservations(
+          productId: product.id,
+          since: DateTime.fromMillisecondsSinceEpoch(0),
+          limit: 10,
+        );
+        expect(after.map((o) => o.priceYen).toSet(), {398, 350});
+        expect(after.singleWhere((o) => o.id == original.id).isValid, isTrue);
+      },
+    );
+
+    test(
+      'a stale correction request cannot change another displayed result',
+      () async {
+        const otherJan = '4901111111111';
+        const otherBarcode = BarcodeCandidate(
+          barcode: otherJan,
+          format: BarcodeFormat.ean13,
+          confidence: 0.95,
+          region: _barcodeRegion,
+        );
+
+        await saveOcrPrice(398);
+
+        coordinator.resetToIdle();
+        coordinator.startScan();
+        barcodeAdapter.add(otherBarcode);
+        await _flush();
+        for (var i = 0; i < 3; i++) {
+          priceAdapter.addFrame([_price(450)]);
+          await _flush();
+        }
+        await _flush(100);
+        expect(coordinator.currentState, ScanState.result);
+
+        final ok = await coordinator.correctLatestObservation(
+          jan: _barcode.barcode,
+          entry: _manualSale,
+        );
+
+        expect(ok, isFalse);
+
+        Future<List<int>> pricesFor(String jan) async {
+          final product = await repository.findProductByJan(jan);
+          final observations = await repository.getValidObservations(
+            productId: product!.id,
+            since: DateTime.now().subtract(const Duration(minutes: 1)),
+            limit: 10,
+          );
+          return [for (final o in observations) o.priceYen];
+        }
+
+        expect(await pricesFor(_barcode.barcode), [398]);
+        expect(await pricesFor(otherJan), [450]);
+      },
+    );
+  });
+  group('manual confidence (B案)', () {
+    late PriceRepository repository;
+    late _ControllableBarcodeAdapter barcodeAdapter;
+    late _ControllablePriceAdapter priceAdapter;
+    late ScanCoordinator coordinator;
+
+    setUp(() async {
+      repository = await createTestRepository();
+      barcodeAdapter = _ControllableBarcodeAdapter();
+      priceAdapter = _ControllablePriceAdapter();
+      coordinator = ScanCoordinator(
+        repository: repository,
+        compareUseCase: CompareUseCase(repository),
+        barcodeAdapter: barcodeAdapter,
+        priceAdapter: priceAdapter,
+      );
+    });
+
+    tearDown(() async {
+      coordinator.dispose();
+      repository.dispose();
+      await barcodeAdapter.close();
+      await priceAdapter.close();
+    });
+
+    test('entry defaults below the OCR range', () {
+      const entry = ManualPriceEntry(priceYen: 350, isTaxInclusive: true);
+
+      expect(entry.confidence, kManualPriceConfidence);
+      expect(kManualPriceConfidence, 0.5);
+      expect(kManualPriceConfidence, lessThan(0.70));
+    });
+
+    test('saved manual value carries 0.5 with the manual flag', () async {
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+
+      final product = await repository.findProductByJan(_barcode.barcode);
+      final observations = await repository.getValidObservations(
+        productId: product!.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.single.priceConfidence, 0.5);
+      expect(observations.single.isManualEntry, isTrue);
+    });
+
+    test('legacy 1.0 manual rows stay valid and comparable', () async {
+      const jan = '4901234567890';
+      final product = await repository.createProvisionalProduct(jan);
+      // Rows written before B案 carry confidence 1.0 with the manual flag.
+      await repository.insertObservation(
+        productId: product.id,
+        priceYen: 400,
+        priceConfidence: 1.0,
+        isManualEntry: true,
+      );
+
+      final result = await CompareUseCase(repository).compare(
+        currentPriceYen: 398,
+        productId: product.id,
+        currentConfidence: 0.9,
+      );
+
+      // No confidence filtering anywhere: the legacy row baselines normally.
+      expect(result.status, domain.ComparisonStatus.historyShort);
+      expect(result.baselineMedianYen, 400);
+
+      // A new B案 row coexists with the legacy one. Note the compared 398
+      // itself is also persisted by compare, as designed.
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+
+      final observations = await repository.getValidObservations(
+        productId: product.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.map((o) => o.priceYen).toSet(), {400, 398, 350});
+    });
+  });
 }
 
 class _ControllableBarcodeAdapter implements BarcodeRecognizerAdapter {
@@ -387,4 +811,107 @@ class _ControllablePriceAdapter implements PriceOcrAdapter {
 
   @override
   void resume() {}
+}
+
+/// Repository failing only the atomic replacement, to prove a failed
+/// correction cannot lose the previous observation.
+class _FailingReplaceRepository implements PriceRepository {
+  final PriceRepository _inner;
+  _FailingReplaceRepository(this._inner);
+
+  @override
+  Future<ProductIdentity?> findProductByJan(String jan) =>
+      _inner.findProductByJan(jan);
+
+  @override
+  Future<ProductIdentity> createProvisionalProduct(String jan) =>
+      _inner.createProvisionalProduct(jan);
+
+  @override
+  Future<List<PriceObservation>> getValidObservations({
+    required String productId,
+    required DateTime since,
+    required int limit,
+  }) => _inner.getValidObservations(
+    productId: productId,
+    since: since,
+    limit: limit,
+  );
+
+  @override
+  Future<PriceObservation> insertObservation({
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) => _inner.insertObservation(
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
+  );
+
+  @override
+  Future<bool> isDuplicate({
+    required String productId,
+    required int priceYen,
+    required DateTime observedAt,
+  }) => _inner.isDuplicate(
+    productId: productId,
+    priceYen: priceYen,
+    observedAt: observedAt,
+  );
+
+  @override
+  Future<PriceObservation> insertObservationWithDate({
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    required DateTime observedAt,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) => _inner.insertObservationWithDate(
+    productId: productId,
+    priceYen: priceYen,
+    priceConfidence: priceConfidence,
+    observedAt: observedAt,
+    isSaleVisible: isSaleVisible,
+    isMemberPriceVisible: isMemberPriceVisible,
+    isCouponPriceVisible: isCouponPriceVisible,
+    isBulkDiscount: isBulkDiscount,
+    isManualEntry: isManualEntry,
+  );
+
+  @override
+  Future<void> invalidateObservation(String id) =>
+      _inner.invalidateObservation(id);
+
+  @override
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) async {
+    throw Exception('simulated replace failure');
+  }
+
+  @override
+  void dispose() => _inner.dispose();
 }

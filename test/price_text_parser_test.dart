@@ -5,6 +5,20 @@ import 'package:selfcheck_jibun_check/infrastructure/price_text_parser.dart';
 void main() {
   const region = Rect(left: 1, top: 2, right: 3, bottom: 4);
 
+  test(
+    'split tax labels require manual entry rather than a guessed amount',
+    () {
+      final lines = [
+        (text: '本体価格', region: region),
+        (text: '198円', region: region),
+        (text: '税込', region: region),
+        (text: '214円', region: region),
+      ];
+      expect(parsePriceText(lines), isNull);
+      expect(parsePriceCandidates(lines), isEmpty);
+    },
+  );
+
   test('prefers currency-marked price over bare numbers', () {
     final result = parsePriceText([
       (text: '在庫 12', region: region),
