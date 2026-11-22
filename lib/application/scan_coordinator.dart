@@ -1,0 +1,803 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
+import '../domain/comparison_result.dart';
+import '../domain/scan_state.dart';
+import '../infrastructure/price_repository.dart';
+import '../infrastructure/price_stabilizer.dart';
+import '../infrastructure/recognition_failure.dart';
+import 'compare_use_case.dart';
+
+/// ScanCoordinator manages the scanning session lifecycle.
+///
+/// Emits state changes via [stateStream] and comparison results via
+/// [resultStream]. A scan session owns exactly one barcode subscription and one
+/// price subscription. Session generations prevent stale async callbacks from a
+/// cancelled or completed session from mutating the next session.
+class ScanCoordinator {
+  final PriceRepository _repository;
+  final CompareUseCase _compareUseCase;
+  final PriceStabilizer _stabilizer;
+  final BarcodeRecognizerAdapter _barcodeAdapter;
+  final PriceOcrAdapter _priceAdapter;
+
+  ScanState _state = ScanState.idle;
+  int _sessionGeneration = 0;
+
+  /// Last error message (cleared on next successful scan start).
+  String? _lastError;
+  String? get lastError => _lastError;
+
+  /// Last transient recognition warning (kept while scanning continues).
+  ///
+  /// Adapter stream errors are transient by default: the scan session keeps
+  /// running and the UI surfaces this warning without leaving the scanning
+  /// state. Fatal adapter errors escalate to [ScanState.error] instead and
+  /// are additionally reported through [lastError]/[errorStream].
+  String? _lastWarning;
+  String? get lastWarning => _lastWarning;
+
+  /// JAN associated with the most recently completed comparison result.
+  String? _resultJanCode;
+  String? _resultObservationId;
+  String? _resultProductId;
+  ManualPriceEntry? _resultPriceContext;
+  ManualPriceEntry? get resultPriceContext => _resultPriceContext;
+  String? get resultJanCode => _resultJanCode;
+
+  /// Cached barcode candidate while waiting for a stable price.
+  BarcodeCandidate? _pendingBarcode;
+
+  /// JAN awaiting a price, exposed so a manual entry can be confirmed
+  /// against it before saving.
+  String? get pendingJanCode => _pendingBarcode?.barcode;
+
+  /// User-entered price awaiting comparison. Takes precedence over OCR
+  /// candidates but never bypasses JAN association or persistence rules.
+  ManualPriceEntry? _manualEntry;
+
+  final StreamController<ScanState> _stateController =
+      StreamController<ScanState>.broadcast();
+  final StreamController<ComparisonResult> _resultController =
+      StreamController<ComparisonResult>.broadcast();
+  final StreamController<String?> _errorController =
+      StreamController<String?>.broadcast();
+  final StreamController<String?> _warningController =
+      StreamController<String?>.broadcast();
+
+  Stream<ScanState> get stateStream => _stateController.stream;
+  Stream<ComparisonResult> get resultStream => _resultController.stream;
+  Stream<String?> get errorStream => _errorController.stream;
+
+  /// Transient recognition warnings. Emitted while the scan session keeps
+  /// running; a `null` event means a previously reported warning was cleared
+  /// after recovery (or because the session ended).
+  Stream<String?> get warningStream => _warningController.stream;
+
+  ScanState get currentState => _state;
+
+  StreamSubscription<BarcodeCandidate>? _barcodeSubscription;
+  StreamSubscription<List<PriceCandidate>>? _priceSubscription;
+  StreamSubscription<RecognitionFrame>? _frameSubscription;
+  RecognitionFrame? _latestFrame;
+  String? _selectedJan;
+  bool _userSelectedBarcode = false;
+  bool _manualInputActive = false;
+  String? get selectedJan => _selectedJan;
+
+  ScanCoordinator({
+    required this._repository,
+    required this._compareUseCase,
+    PriceStabilizer? stabilizer,
+    required this._barcodeAdapter,
+    required this._priceAdapter,
+  }) : _stabilizer = stabilizer ?? PriceStabilizer();
+
+  void startScan() {
+    if (_state != ScanState.idle && _state != ScanState.error) return;
+
+    _sessionGeneration++;
+    final generation = _sessionGeneration;
+    _manualInputActive = false;
+
+    _cancelSubscriptions();
+    _resetRecognitionContext();
+    _manualEntry = null;
+    _resultJanCode = null;
+    _barcodeAdapter.resume();
+    _priceAdapter.resume();
+
+    _state = ScanState.scanning;
+    _lastError = null;
+    _lastWarning = null;
+    _stateController.add(_state);
+
+    final adapter = _barcodeAdapter;
+    if (adapter is FrameBarcodeRecognizerAdapter) {
+      _frameSubscription = adapter.frames.listen(
+        (frame) => _onRecognitionFrame(frame, generation),
+        onError: (Object error, StackTrace trace) =>
+            _handleAdapterError('認識エラー', error, trace, generation),
+      );
+      return;
+    }
+
+    _barcodeSubscription = _barcodeAdapter.results.listen(
+      (barcode) {
+        if (!_isCurrentSession(generation)) return;
+        try {
+          _onBarcodeDetected(barcode, generation);
+        } catch (error, stackTrace) {
+          _handleAdapterError('バーコード処理エラー', error, stackTrace, generation);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!_isCurrentSession(generation)) return;
+        _handleAdapterError('バーコード認識ストリームエラー', error, stackTrace, generation);
+      },
+    );
+
+    _priceSubscription = _priceAdapter.results.listen(
+      (frame) {
+        if (!_isCurrentSession(generation)) return;
+        try {
+          unawaited(_onPriceDetected(frame, generation));
+        } catch (error, stackTrace) {
+          _handleAdapterError('価格OCR処理エラー', error, stackTrace, generation);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!_isCurrentSession(generation)) return;
+        _handleAdapterError('価格OCRストリームエラー', error, stackTrace, generation);
+      },
+    );
+  }
+
+  bool selectBarcode(String jan) {
+    if (_state != ScanState.scanning && _state != ScanState.waitingPrice) {
+      return false;
+    }
+    final matches = _latestFrame?.barcodes.where((b) => b.barcode == jan);
+    if (matches == null || matches.isEmpty) return false;
+    _selectedJan = jan;
+    _userSelectedBarcode = true;
+    _pendingBarcode = matches.first;
+    _stabilizer.reset();
+    _clearWarning();
+    _state = ScanState.waitingPrice;
+    _stateController.add(_state);
+    return true;
+  }
+
+  bool beginManualEntry() {
+    if (_state != ScanState.scanning &&
+        _state != ScanState.waitingPrice &&
+        _state != ScanState.noProduct) {
+      return false;
+    }
+    _manualInputActive = true;
+    _stabilizer.reset();
+    return true;
+  }
+
+  void endManualEntry() {
+    _manualInputActive = false;
+    _stabilizer.reset();
+  }
+
+  void _onRecognitionFrame(RecognitionFrame frame, int generation) {
+    if (!_isCurrentSession(generation) ||
+        (_state != ScanState.scanning && _state != ScanState.waitingPrice)) {
+      return;
+    }
+    _latestFrame = frame;
+    final codes = {for (final b in frame.barcodes) b.barcode: b};
+    if (codes.length > 1 && !_userSelectedBarcode) {
+      _selectedJan = null;
+      _pendingBarcode = null;
+      _stabilizer.reset();
+      _showRecognitionHint('対象のバーコード枠をタップしてください');
+      return;
+    }
+    if (_selectedJan == null && codes.length == 1) {
+      _selectedJan = codes.keys.single;
+    }
+    final barcode = codes[_selectedJan];
+    if (barcode == null) {
+      _pendingBarcode = null;
+      _stabilizer.reset();
+      if (_selectedJan != null) {
+        _showRecognitionHint('選択したバーコードと値札を同じ画面に入れてください');
+      }
+      return;
+    }
+    _pendingBarcode = barcode;
+    if (_state != ScanState.waitingPrice) {
+      _state = ScanState.waitingPrice;
+      _stateController.add(_state);
+    }
+    if (_manualInputActive) return;
+    final manual = _manualEntry;
+    if (manual != null) {
+      _manualEntry = null;
+      unawaited(
+        _compare(
+          barcode,
+          manual.priceYen,
+          manual.confidence,
+          generation,
+          isSaleVisible: manual.isSaleVisible,
+          isMemberPriceVisible: manual.isMemberPriceVisible,
+          isCouponPriceVisible: manual.isCouponPriceVisible,
+          isBulkDiscount: manual.isBulkDiscount,
+          isManualEntry: true,
+        ),
+      );
+      return;
+    }
+    final prices = frame.prices
+        .where((p) => regionsAreSafelyAssociated(barcode.region, p.region))
+        .toList();
+    if (prices.isEmpty) {
+      _stabilizer.reset();
+      _showRecognitionHint('税込価格を確認できない場合は「価格を手入力」を使ってください');
+      return;
+    }
+    _clearWarning();
+    if (!_stabilizer.submitFrame(prices)) return;
+    final selected = _stabilizer.stableCandidates.first;
+    unawaited(
+      _compare(barcode, selected.priceYen, selected.confidence, generation),
+    );
+  }
+
+  void _showRecognitionHint(String message) {
+    if (_lastWarning == message) return;
+    _lastWarning = message;
+    _warningController.add(message);
+  }
+
+  /// Corrects exactly the observation displayed in the current result.
+  ///
+  /// Only available for the currently displayed result: it must never
+  /// interfere with an active recognition session. Retirement and re-insert
+  /// happen atomically inside the repository, so a failed correction can
+  /// never lose price history. Returns false when there is nothing to
+  /// correct or the entry is invalid.
+  Future<bool> correctLatestObservation({
+    required String jan,
+    required ManualPriceEntry entry,
+  }) async {
+    if (_state != ScanState.result || jan != _resultJanCode) return false;
+    if (entry.priceYen < 1 || entry.priceYen > 99999 || !entry.isTaxInclusive) {
+      return false;
+    }
+
+    final oldId = _resultObservationId;
+    final productId = _resultProductId;
+    if (oldId == null || productId == null) return false;
+    final generation = _sessionGeneration;
+    _state = ScanState.comparing;
+    _stateController.add(_state);
+    try {
+      final corrected = await _repository.replaceObservation(
+        oldId: oldId,
+        productId: productId,
+        priceYen: entry.priceYen,
+        priceConfidence: entry.confidence,
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+        isManualEntry: true,
+      );
+      if (!_isCurrentSession(generation)) return false;
+      _resultObservationId = corrected.id;
+      _resultPriceContext = entry;
+    } on Object {
+      // The transaction rolled back: the previous observation is intact.
+      if (_isCurrentSession(generation)) {
+        _state = ScanState.result;
+        _stateController.add(_state);
+      }
+      return false;
+    }
+    if (!_isCurrentSession(generation)) return false;
+
+    _state = ScanState.comparing;
+    _stateController.add(_state);
+
+    try {
+      // The corrected row is already persisted; only recompute the result.
+      final result = await _compareUseCase.compare(
+        currentPriceYen: entry.priceYen,
+        productId: productId,
+        currentConfidence: entry.confidence,
+        skipInsert: true,
+        excludeObservationId: _resultObservationId,
+        isSessionValid: () => _isCurrentSession(generation),
+        isSaleVisible: entry.isSaleVisible,
+        isMemberPriceVisible: entry.isMemberPriceVisible,
+        isCouponPriceVisible: entry.isCouponPriceVisible,
+        isBulkDiscount: entry.isBulkDiscount,
+        isManualEntry: true,
+      );
+      if (!_isCurrentSession(generation)) return false;
+
+      _resultJanCode = jan;
+      _resultController.add(result);
+      _cancelSubscriptions();
+      _resetRecognitionContext();
+      _clearWarning();
+      _barcodeAdapter.pause();
+      _priceAdapter.pause();
+      _state = ScanState.result;
+      _stateController.add(_state);
+      return true;
+    } on Exception catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+      return false;
+    } on Error catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+      return false;
+    }
+  }
+
+  void cancelScan() {
+    _transitionToIdle();
+  }
+
+  /// Submits a user-entered price for the current session.
+  ///
+  /// Accepted in scanning/waitingPrice/noProduct states with a valid amount
+  /// (1–99,999 yen, tax-inclusive only). Tax-exclusive manual entries are
+  /// rejected: without a known tax rate they cannot be converted, and saving
+  /// them would corrupt the tax-inclusive history.
+  ///
+  /// When the barcode is already pending, comparison starts immediately.
+  /// Otherwise the entry is cached and used as soon as a barcode arrives,
+  /// taking precedence over later OCR candidates.
+  bool submitManualPrice(ManualPriceEntry entry) {
+    if (_state != ScanState.scanning &&
+        _state != ScanState.waitingPrice &&
+        _state != ScanState.noProduct) {
+      return false;
+    }
+    if (entry.priceYen < 1 || entry.priceYen > 99999 || !entry.isTaxInclusive) {
+      return false;
+    }
+
+    _manualEntry = entry;
+    if (_state == ScanState.waitingPrice && _pendingBarcode != null) {
+      final barcode = _pendingBarcode!;
+      _manualEntry = null;
+      unawaited(
+        _compare(
+          barcode,
+          entry.priceYen,
+          entry.confidence,
+          _sessionGeneration,
+          isSaleVisible: entry.isSaleVisible,
+          isMemberPriceVisible: entry.isMemberPriceVisible,
+          isCouponPriceVisible: entry.isCouponPriceVisible,
+          isBulkDiscount: entry.isBulkDiscount,
+          isManualEntry: true,
+        ),
+      );
+    }
+    return true;
+  }
+
+  /// Reset a completed/error session so the UI can start another scan.
+  void resetToIdle() {
+    _transitionToIdle();
+  }
+
+  void _transitionToIdle() {
+    _sessionGeneration++;
+    _manualInputActive = false;
+    _cancelSubscriptions();
+    _resetRecognitionContext();
+    _manualEntry = null;
+    _resultJanCode = null;
+    _barcodeAdapter.pause();
+    _priceAdapter.pause();
+    _lastError = null;
+    _clearWarning();
+    _state = ScanState.idle;
+    _stateController.add(_state);
+  }
+
+  void _onBarcodeDetected(BarcodeCandidate barcode, int generation) {
+    if (!_isCurrentSession(generation) || _state != ScanState.scanning) return;
+
+    _clearWarning();
+    _barcodeAdapter.pause();
+    _priceAdapter.pause();
+
+    // A user-confirmed manual price wins over any OCR candidate.
+    final manual = _manualEntry;
+    if (manual != null) {
+      _manualEntry = null;
+      unawaited(
+        _compare(
+          barcode,
+          manual.priceYen,
+          manual.confidence,
+          generation,
+          isSaleVisible: manual.isSaleVisible,
+          isMemberPriceVisible: manual.isMemberPriceVisible,
+          isCouponPriceVisible: manual.isCouponPriceVisible,
+          isBulkDiscount: manual.isBulkDiscount,
+          isManualEntry: true,
+        ),
+      );
+      return;
+    }
+
+    // Prefer the top-ranked stable candidate that is safely associated
+    // with this JAN. A higher-ranked distant price (e.g. a neighboring
+    // product's tax-inclusive total) must not shadow the nearby price.
+    final associated = _stabilizer.stableCandidates
+        .where((c) => regionsAreSafelyAssociated(barcode.region, c.region))
+        .toList();
+    if (associated.isNotEmpty && !_manualInputActive) {
+      final selected = associated.first;
+      unawaited(
+        _compare(barcode, selected.priceYen, selected.confidence, generation),
+      );
+      return;
+    }
+
+    _pendingBarcode = barcode;
+    if (_stabilizer.stablePrice != null) {
+      _stabilizer.reset();
+    }
+    _state = ScanState.waitingPrice;
+    _stateController.add(_state);
+    _priceAdapter.resume();
+  }
+
+  Future<void> _onPriceDetected(
+    List<PriceCandidate> frame,
+    int generation,
+  ) async {
+    if (!_isCurrentSession(generation)) return;
+    if (_manualInputActive) return;
+    if (_state != ScanState.scanning && _state != ScanState.waitingPrice) {
+      return;
+    }
+    if (frame.isEmpty) return;
+
+    // A readable price frame means recognition recovered; drop any stale
+    // transient warning so it does not linger after recovery.
+    _clearWarning();
+    final isStable = _stabilizer.submitFrame(frame);
+    if (!isStable) return;
+
+    _barcodeAdapter.pause();
+    _priceAdapter.pause();
+
+    if (_state == ScanState.waitingPrice && _pendingBarcode != null) {
+      // A user-confirmed manual price wins over any OCR candidate.
+      final manual = _manualEntry;
+      if (manual != null) {
+        _manualEntry = null;
+        await _compare(
+          _pendingBarcode!,
+          manual.priceYen,
+          manual.confidence,
+          generation,
+          isSaleVisible: manual.isSaleVisible,
+          isMemberPriceVisible: manual.isMemberPriceVisible,
+          isCouponPriceVisible: manual.isCouponPriceVisible,
+          isBulkDiscount: manual.isBulkDiscount,
+          isManualEntry: true,
+        );
+        return;
+      }
+      // Select from the stable candidates associated with the pending JAN.
+      // Rejecting a distant price must not hide an associated nearby one.
+      final associated = _stabilizer.stableCandidates
+          .where(
+            (c) =>
+                regionsAreSafelyAssociated(_pendingBarcode!.region, c.region),
+          )
+          .toList();
+      if (associated.isEmpty) {
+        // Keep the JAN pending, but discard this stable value. Saving an
+        // unrelated product's price under the JAN is worse than retrying.
+        _stabilizer.reset();
+        _priceAdapter.resume();
+        return;
+      }
+      final selected = associated.first;
+      await _compare(
+        _pendingBarcode!,
+        selected.priceYen,
+        selected.confidence,
+        generation,
+      );
+      return;
+    }
+
+    _state = ScanState.noProduct;
+    _stateController.add(_state);
+
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!_isCurrentSession(generation) || _state != ScanState.noProduct) return;
+
+    // A stable price without a barcode must never leak into the next product.
+    _resetRecognitionContext();
+    _barcodeAdapter.resume();
+    _priceAdapter.resume();
+    _state = ScanState.scanning;
+    _stateController.add(_state);
+  }
+
+  Future<void> _compare(
+    BarcodeCandidate barcode,
+    int priceYen,
+    double confidence,
+    int generation, {
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) async {
+    if (!_isCurrentSession(generation)) return;
+
+    _state = ScanState.comparing;
+    _stateController.add(_state);
+
+    try {
+      var product = await _repository.findProductByJan(barcode.barcode);
+      if (!_isCurrentSession(generation)) return;
+
+      product ??= await _repository.createProvisionalProduct(barcode.barcode);
+      if (!_isCurrentSession(generation)) return;
+
+      final isDuplicate = await _repository.isDuplicate(
+        productId: product.id,
+        priceYen: priceYen,
+        observedAt: DateTime.now(),
+      );
+      if (!_isCurrentSession(generation)) return;
+
+      final result = await _compareUseCase.compare(
+        currentPriceYen: priceYen,
+        productId: product.id,
+        currentConfidence: confidence,
+        skipInsert: isDuplicate,
+        isSessionValid: () => _isCurrentSession(generation),
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+        isManualEntry: isManualEntry,
+      );
+      if (!_isCurrentSession(generation)) return;
+
+      _resultJanCode = barcode.barcode;
+      _resultObservationId = result.observationId;
+      _resultProductId = product.id;
+      _resultPriceContext = ManualPriceEntry(
+        priceYen: priceYen,
+        isTaxInclusive: true,
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+      );
+      _resultController.add(result);
+      _cancelSubscriptions();
+      _resetRecognitionContext();
+      _clearWarning();
+      _barcodeAdapter.pause();
+      _priceAdapter.pause();
+      _state = ScanState.result;
+      _stateController.add(_state);
+    } on Exception catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+    } on Error catch (error, stackTrace) {
+      if (_isCurrentSession(generation)) {
+        _handleCompareError(error, stackTrace);
+      }
+    }
+  }
+
+  void _handleCompareError(Object error, StackTrace stackTrace) {
+    debugPrint('ScanCoordinator._compare failed: $error');
+    debugPrint('$stackTrace');
+
+    _transitionToError(_friendlyErrorMessage(error));
+  }
+
+  /// Moves the session into [ScanState.error] with [message].
+  ///
+  /// The state event is emitted before the error event so UI listeners that
+  /// clear stale messages on state transitions still display the new error.
+  /// The session generation is invalidated so an in-flight compare (e.g. a
+  /// fatal adapter error arriving mid-compare) cannot flip the error back
+  /// to a result afterwards.
+  void _transitionToError(String message) {
+    _lastError = message;
+
+    _sessionGeneration++;
+    _cancelSubscriptions();
+    _resetRecognitionContext();
+    _clearWarning();
+    _resultJanCode = null;
+    _barcodeAdapter.pause();
+    _priceAdapter.pause();
+    _state = ScanState.error;
+    _stateController.add(_state);
+    _errorController.add(message);
+  }
+
+  void _handleAdapterError(
+    String context,
+    Object error,
+    StackTrace stackTrace,
+    int generation,
+  ) {
+    if (!_isCurrentSession(generation)) return;
+
+    debugPrint('ScanCoordinator adapter error ($context): $error');
+    debugPrint('$stackTrace');
+
+    final message = '$context: ${_friendlyErrorMessage(error)}';
+    if (_isFatalAdapterError(error)) {
+      // Fatal adapter errors (e.g. camera permission denied) can never
+      // recover by retrying frames: stop the scan and surface the error
+      // immediately through the same path as compare failures.
+      _transitionToError(message);
+      return;
+    }
+
+    // Transient adapter stream errors keep the current state/session so a
+    // single bad frame does not stop the scan. The warning is surfaced
+    // through warningStream (shown while scanning); errorStream keeps
+    // receiving the message for backward compatibility with existing
+    // error listeners.
+    _lastError = message;
+    _lastWarning = message;
+    _errorController.add(message);
+    _warningController.add(message);
+  }
+
+  /// Clears a previously reported transient warning, notifying UI listeners
+  /// so a stale warning does not linger after recognition recovered.
+  void _clearWarning() {
+    if (_lastWarning == null) return;
+    _lastWarning = null;
+    if (!_warningController.isClosed) {
+      _warningController.add(null);
+    }
+  }
+
+  bool _isFatalAdapterError(Object error) {
+    final text = error.toString();
+    return text.contains('Permission denied') ||
+        text.contains('CameraAccessDenied');
+  }
+
+  String _friendlyErrorMessage(Object error) {
+    final text = error.toString();
+
+    if (text.contains('SQLITE_FULL') ||
+        text.contains('database or disk is full') ||
+        text.contains(' disk full')) {
+      return 'ストレージ容量が不足しています。';
+    }
+    if (text.contains('SqliteException') || text.contains('database')) {
+      return 'データベースエラーが発生しました。もう一度お試しください。';
+    }
+    if (text.contains('Permission denied') ||
+        text.contains('CameraAccessDenied')) {
+      return 'カメラの権限が必要です。設定から許可してください。';
+    }
+    if (error is RecognitionFailure) return error.displayMessage;
+    return '予期せぬエラーが発生しました。もう一度お試しください。';
+  }
+
+  bool _isCurrentSession(int generation) => generation == _sessionGeneration;
+
+  void _resetRecognitionContext() {
+    _stabilizer.reset();
+    _pendingBarcode = null;
+    _latestFrame = null;
+    _selectedJan = null;
+    _userSelectedBarcode = false;
+  }
+
+  void _cancelSubscriptions() {
+    final frames = _frameSubscription;
+    _frameSubscription = null;
+    if (frames != null) unawaited(frames.cancel());
+    final barcodeSubscription = _barcodeSubscription;
+    final priceSubscription = _priceSubscription;
+    _barcodeSubscription = null;
+    _priceSubscription = null;
+
+    if (barcodeSubscription != null) {
+      unawaited(barcodeSubscription.cancel());
+    }
+    if (priceSubscription != null) {
+      unawaited(priceSubscription.cancel());
+    }
+  }
+
+  void dispose() {
+    _sessionGeneration++;
+    _cancelSubscriptions();
+    _resetRecognitionContext();
+    _resultJanCode = null;
+    _stateController.close();
+    _resultController.close();
+    _errorController.close();
+    _warningController.close();
+  }
+}
+
+/// Adapter interfaces for barcode and price OCR.
+abstract class BarcodeRecognizerAdapter {
+  Stream<BarcodeCandidate> get results;
+  void pause();
+  void resume();
+}
+
+abstract class FrameBarcodeRecognizerAdapter
+    implements BarcodeRecognizerAdapter {
+  Stream<RecognitionFrame> get frames;
+}
+
+abstract class PriceOcrAdapter {
+  /// One event per OCR frame, holding that frame's ranked price candidates.
+  Stream<List<PriceCandidate>> get results;
+  void pause();
+  void resume();
+}
+
+/// Confidence recorded for user-entered manual prices.
+///
+/// OCR candidates carry estimator confidences (0.70–0.90, see
+/// price_text_parser); a manual entry is recorded BELOW that range so history
+/// stays distinguishable per #87. Manual-beats-OCR priority does not depend
+/// on this value: the coordinator selects a cached [ManualPriceEntry] via an
+/// explicit source flag and persists it with `isManualEntry`, so a lower
+/// confidence never flips priority. Median/duplicate/compare ignore
+/// confidence and keep working unchanged.
+const double kManualPriceConfidence = 0.6;
+
+/// A user-entered price awaiting comparison.
+///
+/// [isTaxInclusive] must be true: tax-exclusive amounts cannot be converted
+/// without a known rate, so they are rejected rather than saved.
+class ManualPriceEntry {
+  const ManualPriceEntry({
+    required this.priceYen,
+    this.confidence = kManualPriceConfidence,
+    required this.isTaxInclusive,
+    this.isSaleVisible,
+    this.isMemberPriceVisible,
+    this.isCouponPriceVisible,
+    this.isBulkDiscount,
+  });
+
+  final int priceYen;
+  final double confidence;
+  final bool isTaxInclusive;
+  final bool? isSaleVisible;
+  final bool? isMemberPriceVisible;
+  final bool? isCouponPriceVisible;
+  final bool? isBulkDiscount;
+}
