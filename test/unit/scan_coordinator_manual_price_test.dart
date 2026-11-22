@@ -526,13 +526,6 @@ void main() {
       // The wrapper sees the real product and history but fails the
       // atomic replacement itself.
       final failing = _FailingReplaceRepository(repository);
-      final failingCoordinator = ScanCoordinator(
-        repository: failing,
-        compareUseCase: CompareUseCase(failing),
-        barcodeAdapter: _ControllableBarcodeAdapter(),
-        priceAdapter: _ControllablePriceAdapter(),
-      );
-      addTearDown(failingCoordinator.dispose);
       final retryBarcode = _ControllableBarcodeAdapter();
       final retryPrice = _ControllablePriceAdapter();
       final failingCoordinator = ScanCoordinator(
