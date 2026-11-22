@@ -35,6 +35,7 @@ class ComparisonResult {
     label: label,
     observationCount: observationCount,
     status: status,
+    isManualEntry: isManualEntry,
     observationId: id,
   );
 
