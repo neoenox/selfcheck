@@ -37,6 +37,8 @@ void main() {
         },
         'invalidateObservation': {
           'lib/infrastructure/database/app_database.dart',
+          'lib/infrastructure/price_repository.dart',
+          'lib/infrastructure/price_repository_impl.dart',
         },
         'insertObservation': {
           'lib/application/compare_use_case.dart',
