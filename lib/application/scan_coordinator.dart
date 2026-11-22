@@ -777,6 +777,7 @@ abstract class PriceOcrAdapter {
 /// confidence never flips priority. Median/duplicate/compare ignore
 /// confidence and keep working unchanged.
 const double kManualPriceConfidence = 0.6;
+
 /// A user-entered price awaiting comparison.
 ///
 /// [isTaxInclusive] must be true: tax-exclusive amounts cannot be converted
