@@ -213,7 +213,6 @@ class AppDatabase extends _$AppDatabase {
       priceObservations,
     )..where((t) => t.id.equals(id))).getSingleOrNull();
     if (observation == null || !observation.isValid) return;
-
     // Retain the invalid row for audit/history while freeing the active unique
     // duplicate slot so a corrected observation can be stored in the same
     // five-minute bucket. Including the immutable row id keeps this idempotent
@@ -226,6 +225,48 @@ class AppDatabase extends _$AppDatabase {
         duplicateKey: Value(retiredDuplicateKey),
       ),
     );
+  }
+
+  /// Atomically replace an observation with corrected values.
+  ///
+  /// Invalidation and re-insertion run in one transaction: if the insert
+  /// fails, the original row is untouched, so a failed correction can never
+  /// lose price history.
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  }) {
+    return transaction(() async {
+      final original = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(oldId))).getSingleOrNull();
+      if (original == null || !original.isValid) {
+        throw StateError('Correction target is missing or already retired');
+      }
+      if (original.productId != productId) {
+        throw StateError('Correction target does not belong to product');
+      }
+      await invalidateObservation(oldId);
+      return _insertObservation(
+        productId: productId,
+        priceYen: priceYen,
+        priceConfidence: priceConfidence,
+        observedAt: DateTime.now(),
+        isSaleVisible: isSaleVisible,
+        isMemberPriceVisible: isMemberPriceVisible,
+        isCouponPriceVisible: isCouponPriceVisible,
+        isBulkDiscount: isBulkDiscount,
+        isManualEntry: isManualEntry,
+        strict: true,
+      );
+    });
   }
 
   /// Insert an observation with a specific observedAt date (for testing).
@@ -264,6 +305,7 @@ class AppDatabase extends _$AppDatabase {
     bool? isCouponPriceVisible,
     bool? isBulkDiscount,
     bool? isManualEntry,
+    bool strict = false,
   }) async {
     final id = 'obs-$productId-${observedAt.microsecondsSinceEpoch}-$priceYen';
     final duplicateKey =
@@ -286,6 +328,19 @@ class AppDatabase extends _$AppDatabase {
     // duplicateKey remains a last-resort same-bucket concurrency guard. The
     // production duplicate decision is the rolling-window query in isDuplicate.
     // Any other constraint failure must not be reported as a successful insert.
+    // Corrections must abort on all uniqueness violations. Otherwise an
+    // insertOrIgnore could return a different row with the same duplicateKey
+    // after retiring the original, silently losing its active history entry.
+    if (strict) {
+      await into(priceObservations).insert(entity);
+      final inserted = await (select(
+        priceObservations,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (inserted == null) {
+        throw StateError('Corrected observation was not persisted');
+      }
+      return inserted;
+    }
     await into(
       priceObservations,
     ).insert(entity, mode: InsertMode.insertOrIgnore);

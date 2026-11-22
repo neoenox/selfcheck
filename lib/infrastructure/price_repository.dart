@@ -39,5 +39,24 @@ abstract class PriceRepository {
     bool? isManualEntry,
   });
 
+  /// Retire an observation without deleting it (audit history is kept).
+  /// Retiring frees the duplicate slot so a corrected observation for the
+  /// same bucket can be stored.
+  Future<void> invalidateObservation(String id);
+
+  /// Atomically replace the observation [oldId] with corrected values.
+  /// Either both the retirement and the insert happen, or neither does.
+  Future<PriceObservation> replaceObservation({
+    required String oldId,
+    required String productId,
+    required int priceYen,
+    required double priceConfidence,
+    bool? isSaleVisible,
+    bool? isMemberPriceVisible,
+    bool? isCouponPriceVisible,
+    bool? isBulkDiscount,
+    bool? isManualEntry,
+  });
+
   void dispose();
 }

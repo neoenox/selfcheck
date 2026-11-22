@@ -7,6 +7,7 @@ class ComparisonResult {
   final ComparisonLabel? label; // ラベル
   final int observationCount; // 観測数
   final ComparisonStatus status;
+  final String? observationId;
 
   /// True when the current price was entered manually by the user.
   /// False for OCR readings and legacy observations recorded before
@@ -23,7 +24,19 @@ class ComparisonResult {
     required this.observationCount,
     required this.status,
     this.isManualEntry = false,
+    this.observationId,
   });
+
+  ComparisonResult withObservationId(String? id) => ComparisonResult(
+    currentPrice: currentPrice,
+    baselineMedianYen: baselineMedianYen,
+    diffYen: diffYen,
+    diffRate: diffRate,
+    label: label,
+    observationCount: observationCount,
+    status: status,
+    observationId: id,
+  );
 
   /// 初回価格（履歴なし）
   factory ComparisonResult.firstPrice(

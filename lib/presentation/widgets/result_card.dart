@@ -73,6 +73,7 @@ class ResultCard extends StatelessWidget {
   final String? janCode;
   final VoidCallback? onDismiss;
   final VoidCallback? onScanAgain;
+  final VoidCallback? onCorrectPrice;
 
   const ResultCard({
     super.key,
@@ -80,6 +81,7 @@ class ResultCard extends StatelessWidget {
     this.janCode,
     this.onDismiss,
     this.onScanAgain,
+    this.onCorrectPrice,
   });
 
   @override
@@ -277,6 +279,8 @@ class ResultCard extends StatelessWidget {
         crossAxisAlignment: WrapCrossAlignment.center,
         spacing: 8,
         runSpacing: 8,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             '${result.observationCount}件の履歴',
@@ -287,6 +291,15 @@ class ResultCard extends StatelessWidget {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (onCorrectPrice != null)
+                TextButton(onPressed: onCorrectPrice, child: const Text('訂正')),
               TextButton(onPressed: onDismiss, child: const Text('閉じる')),
               FilledButton.icon(
                 onPressed: onScanAgain,
