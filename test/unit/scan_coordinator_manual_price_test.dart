@@ -861,6 +861,7 @@ void main() {
     });
   });
 }
+}
 
 class _ControllableBarcodeAdapter implements BarcodeRecognizerAdapter {
   final _controller = StreamController<BarcodeCandidate>.broadcast();
@@ -892,7 +893,6 @@ class _ControllablePriceAdapter implements PriceOcrAdapter {
 
   @override
   void resume() {}
-}
 }
 
 /// Repository failing only the atomic replacement, to prove a failed
