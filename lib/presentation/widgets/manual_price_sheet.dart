@@ -74,7 +74,6 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
   late final TextEditingController _priceController = TextEditingController(
     text: widget.initialPriceYen?.toString() ?? '',
   );
-  _PriceKind _kind = _PriceKind.regular;
   late _PriceKind _kind = widget.initialEntry?.isBulkDiscount == true
       ? _PriceKind.bulk
       : widget.initialEntry?.isCouponPriceVisible == true
