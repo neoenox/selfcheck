@@ -777,6 +777,7 @@ abstract class PriceOcrAdapter {
 /// confidence never flips priority. Median/duplicate/compare ignore
 /// confidence and keep working unchanged.
 const double kManualPriceConfidence = 0.6;
+
 /// Deliberately below the OCR estimator range (0.70–0.90) per #87: a manual
 /// value must never outrank machine readings on confidence. Manual priority
 /// over OCR candidates comes from the user-confirmed entry path itself, not
