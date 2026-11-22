@@ -69,6 +69,21 @@ class BarcodeCandidate {
 /// バーコードフォーマット
 enum BarcodeFormat { ean13, ean8, code128, qrCode, unknown }
 
+/// Recognitions and their coordinates from one camera image, never mixed
+/// across different images. Dimensions use ML Kit's rotated coordinates.
+class RecognitionFrame {
+  const RecognitionFrame({
+    required this.barcodes,
+    required this.prices,
+    required this.imageWidth,
+    required this.imageHeight,
+  });
+  final List<BarcodeCandidate> barcodes;
+  final List<PriceCandidate> prices;
+  final double imageWidth;
+  final double imageHeight;
+}
+
 /// 価格候補
 class PriceCandidate {
   final int priceYen; // 1〜99,999

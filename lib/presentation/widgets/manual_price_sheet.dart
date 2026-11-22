@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../application/scan_coordinator.dart';
 import '../scan_screen_controller.dart';
 
 /// Result of the manual price sheet.
@@ -28,8 +29,11 @@ String _priceKindLabel(_PriceKind kind) => switch (kind) {
 /// user taps save. Returns the save outcome, or null when dismissed.
 Future<ManualSaveOutcome?> showManualPriceSheet(
   BuildContext context,
-  ScanScreenController controller,
-) {
+  ScanScreenController controller, {
+  int? initialPriceYen,
+  ManualPriceEntry? initialEntry,
+  Future<bool> Function(ManualPriceEntry entry)? onSaveEntry,
+}) {
   return showModalBottomSheet<ManualSaveOutcome>(
     context: context,
     isScrollControlled: true,
@@ -37,25 +41,51 @@ Future<ManualSaveOutcome?> showManualPriceSheet(
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
       ),
-      child: _ManualPriceForm(controller: controller),
+      child: _ManualPriceForm(
+        controller: controller,
+        initialPriceYen: initialPriceYen,
+        initialEntry: initialEntry,
+        onSaveEntry: onSaveEntry,
+      ),
     ),
   );
 }
 
 class _ManualPriceForm extends StatefulWidget {
-  const _ManualPriceForm({required this.controller});
+  const _ManualPriceForm({
+    required this.controller,
+    this.initialPriceYen,
+    this.initialEntry,
+    this.onSaveEntry,
+  });
 
   final ScanScreenController controller;
+  final int? initialPriceYen;
+  final ManualPriceEntry? initialEntry;
+
+  /// Overrides the default submit path (used for price correction).
+  final Future<bool> Function(ManualPriceEntry entry)? onSaveEntry;
 
   @override
   State<_ManualPriceForm> createState() => _ManualPriceFormState();
 }
 
 class _ManualPriceFormState extends State<_ManualPriceForm> {
-  final _priceController = TextEditingController();
-  _PriceKind _kind = _PriceKind.regular;
+  late final TextEditingController _priceController = TextEditingController(
+    text: widget.initialPriceYen?.toString() ?? '',
+  );
+  late _PriceKind _kind = widget.initialEntry?.isBulkDiscount == true
+      ? _PriceKind.bulk
+      : widget.initialEntry?.isCouponPriceVisible == true
+      ? _PriceKind.coupon
+      : widget.initialEntry?.isMemberPriceVisible == true
+      ? _PriceKind.member
+      : widget.initialEntry?.isSaleVisible == true
+      ? _PriceKind.sale
+      : _PriceKind.regular;
   bool _isTaxInclusive = true;
   String? _submitError;
+  bool _saving = false;
 
   @override
   void dispose() {
@@ -70,13 +100,17 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
     return value != null && value >= 1 && value <= 99999;
   }
 
-  bool get _canSave => _priceValid && _isTaxInclusive;
+  bool get _canSave => !_saving && _priceValid && _isTaxInclusive;
 
-  void _save() {
+  void _save() async {
     final value = _parsedPrice;
     if (value == null || !_canSave) return;
+    setState(() {
+      _saving = true;
+      _submitError = null;
+    });
 
-    final ok = widget.controller.submitManualPrice(
+    final entry = ManualPriceEntry(
       priceYen: value,
       isTaxInclusive: _isTaxInclusive,
       isSaleVisible: _kind == _PriceKind.sale ? true : null,
@@ -84,13 +118,32 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
       isCouponPriceVisible: _kind == _PriceKind.coupon ? true : null,
       isBulkDiscount: _kind == _PriceKind.bulk ? true : null,
     );
+    bool ok;
+    try {
+      final save = widget.onSaveEntry;
+      ok = save != null
+          ? await save(entry)
+          : widget.controller.submitManualPrice(
+              priceYen: entry.priceYen,
+              isTaxInclusive: entry.isTaxInclusive,
+              isSaleVisible: entry.isSaleVisible,
+              isMemberPriceVisible: entry.isMemberPriceVisible,
+              isCouponPriceVisible: entry.isCouponPriceVisible,
+              isBulkDiscount: entry.isBulkDiscount,
+            );
+    } catch (_) {
+      ok = false;
+    }
+    // The user may dismiss the sheet while a correction is being persisted.
+    // Never call setState or Navigator after its State has been disposed.
+    if (!mounted) return;
     if (!ok) {
       setState(() {
+        _saving = false;
         _submitError = '保存できませんでした。スキャン状態を確認してください。';
       });
       return;
     }
-    if (!mounted) return;
     Navigator.of(context).pop(
       ManualSaveOutcome(
         saved: true,
@@ -119,15 +172,17 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
                 ),
               ),
             ),
-            const Text(
-              '価格を手入力',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            Text(
+              widget.onSaveEntry == null ? '価格を手入力' : '価格を訂正',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             ListenableBuilder(
               listenable: widget.controller,
               builder: (context, _) {
-                final jan = widget.controller.pendingJanCode;
+                final jan = widget.onSaveEntry == null
+                    ? widget.controller.pendingJanCode
+                    : widget.controller.uiState.janCode;
                 return Text(
                   jan == null ? 'バーコード未読取：保存は読取後に自動実行されます' : '保存先JAN：$jan',
                   style: TextStyle(
@@ -211,7 +266,9 @@ class _ManualPriceFormState extends State<_ManualPriceForm> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: _saving
+                        ? null
+                        : () => Navigator.of(context).pop(),
                     child: const Text('キャンセル'),
                   ),
                 ),
