@@ -12,6 +12,8 @@ import '../application/scan_coordinator.dart';
 import '../domain/scan_state.dart';
 import 'price_text_parser.dart';
 import 'recognition_failure_policy.dart';
+import 'recognition_failure.dart';
+import '../presentation/widgets/barcode_selection_overlay.dart';
 
 /// Owns the live camera and on-device ML Kit recognizers.
 ///
@@ -34,6 +36,11 @@ class CameraRecognitionPipeline extends ChangeNotifier {
       StreamController<BarcodeCandidate>.broadcast();
   final StreamController<List<PriceCandidate>> _priceResults =
       StreamController<List<PriceCandidate>>.broadcast();
+  final StreamController<RecognitionFrame> _frames =
+      StreamController<RecognitionFrame>.broadcast();
+  RecognitionFrame? _latestFrame;
+  Stream<RecognitionFrame> get frames => _frames.stream;
+  RecognitionFrame? get latestFrame => _latestFrame;
 
   CameraController? _cameraController;
   CameraDescription? _camera;
@@ -43,6 +50,7 @@ class CameraRecognitionPipeline extends ChangeNotifier {
   bool _disposed = false;
   bool _cameraActive = true;
   int _cameraGeneration = 0;
+  int _recognitionGeneration = 0;
   Object? _initializationError;
   final RecognitionFailurePolicy _recognitionFailurePolicy =
       RecognitionFailurePolicy();
@@ -124,6 +132,7 @@ class CameraRecognitionPipeline extends ChangeNotifier {
     if (_disposed) return;
     _cameraActive = false;
     _cameraGeneration++;
+    _latestFrame = null;
 
     final controller = _cameraController;
     _cameraController = null;
@@ -162,8 +171,18 @@ class CameraRecognitionPipeline extends ChangeNotifier {
     }
   }
 
-  void enableBarcode() => _barcodeEnabled = true;
-  void disableBarcode() => _barcodeEnabled = false;
+  void enableBarcode() {
+    _recognitionGeneration++;
+    _barcodeEnabled = true;
+  }
+
+  void disableBarcode() {
+    _barcodeEnabled = false;
+    _recognitionGeneration++;
+    _latestFrame = null;
+    if (!_disposed) notifyListeners();
+  }
+
   void enablePrice() => _priceEnabled = true;
   void disablePrice() => _priceEnabled = false;
 
@@ -180,32 +199,44 @@ class CameraRecognitionPipeline extends ChangeNotifier {
     }
     _lastProcessed = now;
     _processing = true;
+    final recognitionGeneration = _recognitionGeneration;
     var frameFailed = false;
+    var stage = RecognitionStage.image;
     try {
       final inputImage = _toInputImage(image);
       if (inputImage == null || !_isCurrentCameraOperation(generation)) {
         return;
       }
+      final frameBarcodes = <BarcodeCandidate>[];
+      var framePrices = <PriceCandidate>[];
 
       if (_barcodeEnabled) {
+        stage = RecognitionStage.barcode;
         final barcodes = await _barcodeScanner.processImage(inputImage);
-        if (!_isCurrentCameraOperation(generation) || !_barcodeEnabled) {
+        if (!_isCurrentCameraOperation(generation) ||
+            !_barcodeEnabled ||
+            recognitionGeneration != _recognitionGeneration) {
           return;
         }
+        stage = RecognitionStage.result;
         for (final barcode in barcodes) {
           final candidate = _toBarcodeCandidate(barcode);
           if (candidate != null && !_barcodeResults.isClosed) {
+            frameBarcodes.add(candidate);
             _barcodeResults.add(candidate);
-            break;
           }
         }
       }
 
       if (_priceEnabled && _isCurrentCameraOperation(generation)) {
+        stage = RecognitionStage.price;
         final recognizedText = await _textRecognizer.processImage(inputImage);
-        if (!_isCurrentCameraOperation(generation) || !_priceEnabled) {
+        if (!_isCurrentCameraOperation(generation) ||
+            !_priceEnabled ||
+            recognitionGeneration != _recognitionGeneration) {
           return;
         }
+        stage = RecognitionStage.result;
         final candidates = parsePriceCandidates(
           recognizedText.blocks.expand(
             (block) => block.lines.map(
@@ -221,13 +252,32 @@ class CameraRecognitionPipeline extends ChangeNotifier {
             ),
           ),
         );
+        framePrices = candidates;
         // Ambiguous or empty frames yield no candidates and are skipped, so
         // a guessed price can never enter stabilization.
         if (candidates.isNotEmpty && !_priceResults.isClosed) {
           _priceResults.add(candidates);
         }
       }
+      if (_barcodeEnabled &&
+          _isCurrentCameraOperation(generation) &&
+          !_frames.isClosed) {
+        final rotation = inputImage.metadata!.rotation;
+        final swapAxes =
+            rotation == InputImageRotation.rotation90deg ||
+            rotation == InputImageRotation.rotation270deg;
+        final frame = RecognitionFrame(
+          barcodes: List.unmodifiable(frameBarcodes),
+          prices: List.unmodifiable(framePrices),
+          imageWidth: (swapAxes ? image.height : image.width).toDouble(),
+          imageHeight: (swapAxes ? image.width : image.height).toDouble(),
+        );
+        _latestFrame = frame;
+        _frames.add(frame);
+        notifyListeners();
+      }
     } on Object catch (error, stackTrace) {
+      if (recognitionGeneration != _recognitionGeneration) return;
       frameFailed = true;
       debugPrint('CameraRecognitionPipeline frame failed: $error');
       debugPrint('$stackTrace');
@@ -235,7 +285,17 @@ class CameraRecognitionPipeline extends ChangeNotifier {
         fatal: _isFatalRecognitionError(error),
       );
       if (shouldNotify) {
-        _publishRecognitionError(error, stackTrace);
+        _publishRecognitionError(
+          RecognitionFailure(
+            stage: stage,
+            cause: error,
+            imageDescription:
+                '${image.width}x${image.height} format=${image.format.raw} '
+                'planes=${image.planes.length} '
+                'bytes=${image.planes.fold<int>(0, (sum, plane) => sum + plane.bytes.length)}',
+          ),
+          stackTrace,
+        );
       }
     } finally {
       if (!frameFailed) {
@@ -254,6 +314,9 @@ class CameraRecognitionPipeline extends ChangeNotifier {
   }
 
   void _publishRecognitionError(Object error, StackTrace stackTrace) {
+    if (_barcodeEnabled && !_frames.isClosed) {
+      _frames.addError(error, stackTrace);
+    }
     if (_barcodeEnabled && !_barcodeResults.isClosed) {
       _barcodeResults.addError(error, stackTrace);
     }
@@ -364,16 +427,19 @@ class CameraRecognitionPipeline extends ChangeNotifier {
     unawaited(_textRecognizer.close());
     unawaited(_barcodeResults.close());
     unawaited(_priceResults.close());
+    unawaited(_frames.close());
     super.dispose();
   }
 }
 
-class CameraBarcodeAdapter implements BarcodeRecognizerAdapter {
+class CameraBarcodeAdapter implements FrameBarcodeRecognizerAdapter {
   const CameraBarcodeAdapter(this.pipeline);
   final CameraRecognitionPipeline pipeline;
 
   @override
   Stream<BarcodeCandidate> get results => pipeline.barcodeResults;
+  @override
+  Stream<RecognitionFrame> get frames => pipeline.frames;
 
   @override
   void pause() => pipeline.disableBarcode();
@@ -397,9 +463,16 @@ class CameraPriceOcrAdapter implements PriceOcrAdapter {
 }
 
 class CameraPreviewSurface extends StatelessWidget {
-  const CameraPreviewSurface({super.key, required this.pipeline});
+  const CameraPreviewSurface({
+    super.key,
+    required this.pipeline,
+    this.onBarcodeSelected,
+    this.selectedJan,
+  });
 
   final CameraRecognitionPipeline pipeline;
+  final ValueChanged<String>? onBarcodeSelected;
+  final String? selectedJan;
 
   @override
   Widget build(BuildContext context) {
@@ -411,9 +484,15 @@ class CameraPreviewSurface extends StatelessWidget {
           return ColoredBox(
             color: Colors.black,
             child: Center(
-              child: AspectRatio(
-                aspectRatio: controller.value.aspectRatio,
-                child: CameraPreview(controller),
+              child: CameraPreview(
+                controller,
+                child: pipeline.latestFrame == null || onBarcodeSelected == null
+                    ? null
+                    : BarcodeSelectionOverlay(
+                        frame: pipeline.latestFrame!,
+                        selectedJan: selectedJan,
+                        onSelected: onBarcodeSelected!,
+                      ),
               ),
             ),
           );

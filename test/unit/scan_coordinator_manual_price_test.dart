@@ -405,6 +405,43 @@ void main() {
       return [for (final o in observations) o.priceYen];
     }
 
+    test(
+      'corrects the displayed duplicate row, not a newer different price',
+      () async {
+        await saveOcrPrice(398);
+        final product = await repository.findProductByJan(_barcode.barcode);
+        await repository.insertObservationWithDate(
+          productId: product!.id,
+          priceYen: 450,
+          priceConfidence: 0.9,
+          observedAt: DateTime.now().add(const Duration(seconds: 10)),
+        );
+        coordinator.resetToIdle();
+        await saveOcrPrice(398);
+        expect(
+          await coordinator.correctLatestObservation(
+            jan: _barcode.barcode,
+            entry: _manualSale,
+          ),
+          isTrue,
+        );
+        expect((await validPrices()).toSet(), {350, 450});
+      },
+    );
+
+    test('correction excludes itself from its comparison baseline', () async {
+      await saveOcrPrice(398);
+      final results = <domain.ComparisonResult>[];
+      final subscription = coordinator.resultStream.listen(results.add);
+      await coordinator.correctLatestObservation(
+        jan: _barcode.barcode,
+        entry: _manualSale,
+      );
+      await _flush();
+      expect(results.last.status, domain.ComparisonStatus.firstPrice);
+      await subscription.cancel();
+    });
+
     test('corrects the latest observation and refreshes the result', () async {
       await saveOcrPrice(398);
       expect(await validPrices(), [398]);
@@ -496,6 +533,26 @@ void main() {
         priceAdapter: _ControllablePriceAdapter(),
       );
       addTearDown(failingCoordinator.dispose);
+      final retryBarcode = _ControllableBarcodeAdapter();
+      final retryPrice = _ControllablePriceAdapter();
+      final failingCoordinator = ScanCoordinator(
+        repository: failing,
+        compareUseCase: CompareUseCase(failing),
+        barcodeAdapter: retryBarcode,
+        priceAdapter: retryPrice,
+      );
+      addTearDown(failingCoordinator.dispose);
+      addTearDown(retryBarcode.close);
+      addTearDown(retryPrice.close);
+      failingCoordinator.startScan();
+      retryBarcode.add(_barcode);
+      await _flush();
+      for (var i = 0; i < 3; i++) {
+        retryPrice.addFrame([_price(398)]);
+        await _flush();
+      }
+      await _flush(100);
+      expect(failingCoordinator.currentState, ScanState.result);
 
       final ok = await failingCoordinator.correctLatestObservation(
         jan: _barcode.barcode,
@@ -503,6 +560,7 @@ void main() {
       );
 
       expect(ok, isFalse);
+      expect(failingCoordinator.currentState, ScanState.result);
       expect(await validPrices(), [398]);
     });
 
@@ -635,6 +693,137 @@ void main() {
 
       expect(await pricesFor(_barcode.barcode), [350]);
       expect(await pricesFor(otherJan), [450]);
+    test(
+      'a stale correction request cannot change another displayed result',
+      () async {
+        const otherJan = '4901111111111';
+        const otherBarcode = BarcodeCandidate(
+          barcode: otherJan,
+          format: BarcodeFormat.ean13,
+          confidence: 0.95,
+          region: _barcodeRegion,
+        );
+
+        await saveOcrPrice(398);
+
+        coordinator.resetToIdle();
+        coordinator.startScan();
+        barcodeAdapter.add(otherBarcode);
+        await _flush();
+        for (var i = 0; i < 3; i++) {
+          priceAdapter.addFrame([_price(450)]);
+          await _flush();
+        }
+        await _flush(100);
+        expect(coordinator.currentState, ScanState.result);
+
+        final ok = await coordinator.correctLatestObservation(
+          jan: _barcode.barcode,
+          entry: _manualSale,
+        );
+
+        expect(ok, isFalse);
+
+        Future<List<int>> pricesFor(String jan) async {
+          final product = await repository.findProductByJan(jan);
+          final observations = await repository.getValidObservations(
+            productId: product!.id,
+            since: DateTime.now().subtract(const Duration(minutes: 1)),
+            limit: 10,
+          );
+          return [for (final o in observations) o.priceYen];
+        }
+
+        expect(await pricesFor(_barcode.barcode), [398]);
+        expect(await pricesFor(otherJan), [450]);
+      },
+    );
+  });
+  group('manual confidence (B案)', () {
+    late PriceRepository repository;
+    late _ControllableBarcodeAdapter barcodeAdapter;
+    late _ControllablePriceAdapter priceAdapter;
+    late ScanCoordinator coordinator;
+
+    setUp(() async {
+      repository = await createTestRepository();
+      barcodeAdapter = _ControllableBarcodeAdapter();
+      priceAdapter = _ControllablePriceAdapter();
+      coordinator = ScanCoordinator(
+        repository: repository,
+        compareUseCase: CompareUseCase(repository),
+        barcodeAdapter: barcodeAdapter,
+        priceAdapter: priceAdapter,
+      );
+    });
+
+    tearDown(() async {
+      coordinator.dispose();
+      repository.dispose();
+      await barcodeAdapter.close();
+      await priceAdapter.close();
+    });
+
+    test('entry defaults below the OCR range', () {
+      const entry = ManualPriceEntry(priceYen: 350, isTaxInclusive: true);
+
+      expect(entry.confidence, kManualPriceConfidence);
+      expect(kManualPriceConfidence, 0.5);
+      expect(kManualPriceConfidence, lessThan(0.70));
+    });
+
+    test('saved manual value carries 0.5 with the manual flag', () async {
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+
+      final product = await repository.findProductByJan(_barcode.barcode);
+      final observations = await repository.getValidObservations(
+        productId: product!.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.single.priceConfidence, 0.5);
+      expect(observations.single.isManualEntry, isTrue);
+    });
+
+    test('legacy 1.0 manual rows stay valid and comparable', () async {
+      const jan = '4901234567890';
+      final product = await repository.createProvisionalProduct(jan);
+      // Rows written before B案 carry confidence 1.0 with the manual flag.
+      await repository.insertObservation(
+        productId: product.id,
+        priceYen: 400,
+        priceConfidence: 1.0,
+        isManualEntry: true,
+      );
+
+      final result = await CompareUseCase(repository).compare(
+        currentPriceYen: 398,
+        productId: product.id,
+        currentConfidence: 0.9,
+      );
+
+      // No confidence filtering anywhere: the legacy row baselines normally.
+      expect(result.status, domain.ComparisonStatus.historyShort);
+      expect(result.baselineMedianYen, 400);
+
+      // A new B案 row coexists with the legacy one. Note the compared 398
+      // itself is also persisted by compare, as designed.
+      coordinator.startScan();
+      barcodeAdapter.add(_barcode);
+      await _flush();
+      expect(coordinator.submitManualPrice(_manualSale), isTrue);
+      await _flush(100);
+
+      final observations = await repository.getValidObservations(
+        productId: product.id,
+        since: DateTime.now().subtract(const Duration(minutes: 1)),
+        limit: 10,
+      );
+      expect(observations.map((o) => o.priceYen).toSet(), {400, 398, 350});
     });
   });
 }

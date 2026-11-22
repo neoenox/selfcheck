@@ -97,6 +97,17 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('¥350'), findsOneWidget);
+      expect(find.text('SALE'), findsOneWidget);
+      await tester.tap(find.text('訂正'));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('価格を訂正'), findsOneWidget);
+      expect(find.textContaining('保存先JAN：${_barcode.barcode}'), findsOneWidget);
+      expect(
+        tester
+            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, '特売'))
+            .selected,
+        isTrue,
+      );
     });
 
     testWidgets('save stays disabled for invalid input', (tester) async {
