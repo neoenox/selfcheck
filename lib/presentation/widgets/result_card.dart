@@ -271,27 +271,16 @@ class ResultCard extends StatelessWidget {
   Widget _buildFooter(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      // Wrap so the buttons flow below the count on narrow screens /
-      // enlarged text instead of overflowing. At normal sizes this lays
-      // out identically to the previous Row (count left, buttons right).
       child: Wrap(
         alignment: WrapAlignment.spaceBetween,
         crossAxisAlignment: WrapCrossAlignment.center,
         spacing: 8,
         runSpacing: 8,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             '${result.observationCount}件の履歴',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
           ),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-          const SizedBox(height: 8),
           Wrap(
             alignment: WrapAlignment.end,
             spacing: 8,
