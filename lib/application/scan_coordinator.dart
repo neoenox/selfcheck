@@ -782,7 +782,6 @@ const double kManualPriceConfidence = 0.6;
 /// over OCR candidates comes from the user-confirmed entry path itself, not
 /// from this value. Origin (manual vs OCR) is recorded separately in
 /// [ManualPriceEntry.isManualEntry].
-const double kManualPriceConfidence = 0.5;
 
 /// A user-entered price awaiting comparison.
 ///
