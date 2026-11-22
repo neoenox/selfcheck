@@ -62,6 +62,7 @@ final RegExp _priceContextPattern = RegExp(
 /// distinct price values, no price is returned so a wrong amount can never
 /// stabilize into the persisted history.
 PriceCandidate? parsePriceText(Iterable<({String text, Rect region})> lines) {
+  if (_hasDetachedTaxLabel(lines)) return null;
   final candidates = _extractCandidates(lines);
   if (candidates.isEmpty) return null;
   if (_isAmbiguousPriceContext(lines, candidates)) return null;
@@ -93,6 +94,7 @@ PriceCandidate? parsePriceText(Iterable<({String text, Rect region})> lines) {
 List<PriceCandidate> parsePriceCandidates(
   Iterable<({String text, Rect region})> lines,
 ) {
+  if (_hasDetachedTaxLabel(lines)) return [];
   final extracted = _extractCandidates(lines);
   if (extracted.isEmpty) return [];
   if (_isAmbiguousPriceContext(lines, extracted)) return [];
@@ -113,6 +115,15 @@ List<PriceCandidate> parsePriceCandidates(
       ),
   ];
 }
+
+// ML Kit can split a tax label from its amount into separate lines. Without
+// a reliable association, bare/currency-marked values must not be auto-saved.
+bool _hasDetachedTaxLabel(Iterable<({String text, Rect region})> lines) =>
+    lines.any(
+      (line) =>
+          RegExp(r'税込|総額|税抜|税別|本体価格').hasMatch(line.text) &&
+          !_pricePattern.hasMatch(line.text),
+    );
 
 int _compareParsedPrice(_ParsedPrice a, _ParsedPrice b) {
   if (a.priority != b.priority) return b.priority.compareTo(a.priority);

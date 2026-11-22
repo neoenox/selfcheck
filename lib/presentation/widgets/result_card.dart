@@ -73,6 +73,7 @@ class ResultCard extends StatelessWidget {
   final String? janCode;
   final VoidCallback? onDismiss;
   final VoidCallback? onScanAgain;
+  final VoidCallback? onCorrectPrice;
 
   const ResultCard({
     super.key,
@@ -80,6 +81,7 @@ class ResultCard extends StatelessWidget {
     this.janCode,
     this.onDismiss,
     this.onScanAgain,
+    this.onCorrectPrice,
   });
 
   @override
@@ -223,19 +225,29 @@ class ResultCard extends StatelessWidget {
   Widget _buildFooter(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             '${result.observationCount}件の履歴',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
           ),
-          const Spacer(),
-          TextButton(onPressed: onDismiss, child: const Text('閉じる')),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: onScanAgain,
-            icon: const Icon(Icons.qr_code_scanner, size: 18),
-            label: const Text('スキャン'),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (onCorrectPrice != null)
+                TextButton(onPressed: onCorrectPrice, child: const Text('訂正')),
+              TextButton(onPressed: onDismiss, child: const Text('閉じる')),
+              FilledButton.icon(
+                onPressed: onScanAgain,
+                icon: const Icon(Icons.qr_code_scanner, size: 18),
+                label: const Text('スキャン'),
+              ),
+            ],
           ),
         ],
       ),
