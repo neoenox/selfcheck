@@ -769,12 +769,14 @@ abstract class PriceOcrAdapter {
 
 /// Confidence recorded for user-entered manual prices.
 ///
-/// Deliberately below the OCR estimator range (0.70–0.90) per #87: a manual
-/// value must never outrank machine readings on confidence. Manual priority
-/// over OCR candidates comes from the user-confirmed entry path itself, not
-/// from this value. Origin (manual vs OCR) is recorded separately in
-/// [ManualPriceEntry.isManualEntry].
-const double kManualPriceConfidence = 0.5;
+/// OCR candidates carry estimator confidences (0.70–0.90, see
+/// price_text_parser); a manual entry is recorded BELOW that range so history
+/// stays distinguishable per #87. Manual-beats-OCR priority does not depend
+/// on this value: the coordinator selects a cached [ManualPriceEntry] via an
+/// explicit source flag and persists it with `isManualEntry`, so a lower
+/// confidence never flips priority. Median/duplicate/compare ignore
+/// confidence and keep working unchanged.
+const double kManualPriceConfidence = 0.6;
 
 /// A user-entered price awaiting comparison.
 ///
