@@ -893,6 +893,7 @@ class _ControllablePriceAdapter implements PriceOcrAdapter {
   @override
   void resume() {}
 }
+}
 
 /// Repository failing only the atomic replacement, to prove a failed
 /// correction cannot lose the previous observation.
