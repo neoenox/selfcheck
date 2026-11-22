@@ -83,6 +83,7 @@ class CompareUseCase {
     if (observations.isEmpty) {
       return ComparisonResult.firstPrice(
         currentPriceYen,
+        isManualEntry: isManualEntry == true,
       ).withObservationId(observationId);
     }
 
@@ -94,6 +95,7 @@ class CompareUseCase {
         currentPrice: currentPriceYen,
         lastPrice: median,
         observationCount: observations.length,
+        isManualEntry: isManualEntry == true,
       ).withObservationId(observationId);
     }
 
@@ -108,6 +110,7 @@ class CompareUseCase {
       diffRate: diffRate,
       label: label,
       observationCount: observations.length,
+      isManualEntry: isManualEntry == true,
     ).withObservationId(observationId);
   }
 
