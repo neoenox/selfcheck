@@ -820,7 +820,6 @@ void main() {
     });
   });
 }
-}
 
 class _ControllableBarcodeAdapter implements BarcodeRecognizerAdapter {
   final _controller = StreamController<BarcodeCandidate>.broadcast();
