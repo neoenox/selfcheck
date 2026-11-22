@@ -721,11 +721,11 @@ void main() {
       const entry = ManualPriceEntry(priceYen: 350, isTaxInclusive: true);
 
       expect(entry.confidence, kManualPriceConfidence);
-      expect(kManualPriceConfidence, 0.5);
+      expect(kManualPriceConfidence, 0.6);
       expect(kManualPriceConfidence, lessThan(0.70));
     });
 
-    test('saved manual value carries 0.5 with the manual flag', () async {
+    test('saved manual value carries 0.6 with the manual flag', () async {
       coordinator.startScan();
       barcodeAdapter.add(_barcode);
       await _flush();
@@ -738,7 +738,7 @@ void main() {
         since: DateTime.now().subtract(const Duration(minutes: 1)),
         limit: 10,
       );
-      expect(observations.single.priceConfidence, 0.5);
+      expect(observations.single.priceConfidence, 0.6);
       expect(observations.single.isManualEntry, isTrue);
     });
 
